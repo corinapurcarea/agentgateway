@@ -409,10 +409,7 @@ impl Jwt {
 			if now_ms >= expiration_ms {
 				debug!(
 					created_at,
-					expires_in,
-					expiration_ms,
-					now_ms,
-					"Token expired based on created_at + expires_in"
+					expires_in, expiration_ms, now_ms, "Token expired based on created_at + expires_in"
 				);
 				return Err(TokenError::Expired);
 			}
