@@ -53,6 +53,7 @@ impl ProxyResponse {
 			ProxyError::BasicAuthenticationFailure(_) => ProxyResponseReason::BasicAuth,
 			ProxyError::APIKeyAuthenticationFailure(_) => ProxyResponseReason::APIKeyAuth,
 			ProxyError::ExternalAuthorizationFailed(_) => ProxyResponseReason::ExtAuth,
+			ProxyError::MCP(mcp::Error::ExtAuthzDenied { .. }) => ProxyResponseReason::ExtAuth,
 			ProxyError::MCP(_) => ProxyResponseReason::MCP,
 			ProxyError::AuthorizationFailed | ProxyError::CsrfValidationFailed => {
 				ProxyResponseReason::Authorization
@@ -267,6 +268,9 @@ impl ProxyError {
 			ProxyError::MCP(mcp::Error::SendError(_, _)) => StatusCode::INTERNAL_SERVER_ERROR,
 			// Note: we do not return a 401/403 here, as the obscure that it was rejected due to auth
 			ProxyError::MCP(mcp::Error::Authorization(_, _, _)) => StatusCode::INTERNAL_SERVER_ERROR,
+			ProxyError::MCP(mcp::Error::ExtAuthzDenied {
+				ref status_code, ..
+			}) => *status_code,
 		};
 		let msg = self.to_string();
 		let mut rb = ::http::Response::builder().status(code);
@@ -341,6 +345,36 @@ impl ProxyError {
 				error: ErrorData {
 					code: ErrorCode::INVALID_PARAMS,
 					message: e.to_string().into(),
+					data: None,
+				},
+			})
+			.unwrap_or_default();
+			return rb
+				.header("content-type", "application/json")
+				.body(http::Body::from(msg))
+				.unwrap();
+		}
+		if let ProxyError::MCP(mcp::Error::ExtAuthzDenied {
+			ref req_id,
+			ref response_headers,
+			ref body,
+			..
+		}) = self
+		{
+			for (name, value) in response_headers {
+				rb = rb.header(name, value);
+			}
+			let error_message = if body.is_empty() {
+				"external authorization denied".into()
+			} else {
+				body.clone().into()
+			};
+			let msg = serde_json::to_string(&JsonRpcError {
+				jsonrpc: Default::default(),
+				id: req_id.clone(),
+				error: ErrorData {
+					code: ErrorCode::INTERNAL_ERROR,
+					message: error_message,
 					data: None,
 				},
 			})

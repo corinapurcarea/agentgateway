@@ -117,6 +117,7 @@ pub struct BackendPolicies {
 
 	pub mcp_authorization: Option<McpAuthorizationSet>,
 	pub mcp_authentication: Option<McpAuthentication>,
+	pub mcp_ext_authz: Option<ext_authz::ExtAuthz>,
 
 	pub http: Option<types::backend::HTTP>,
 	pub tcp: Option<types::backend::TCP>,
@@ -145,6 +146,7 @@ impl BackendPolicies {
 			llm: other.llm.or(self.llm),
 			mcp_authorization: other.mcp_authorization.or(self.mcp_authorization),
 			mcp_authentication: other.mcp_authentication.or(self.mcp_authentication),
+			mcp_ext_authz: other.mcp_ext_authz.or(self.mcp_ext_authz),
 			inference_routing: other.inference_routing.or(self.inference_routing),
 			http: other.http.or(self.http),
 			tcp: other.tcp.or(self.tcp),
@@ -656,6 +658,9 @@ impl Store {
 				},
 				BackendPolicy::McpAuthentication(p) => {
 					pol.mcp_authentication.get_or_insert_with(|| p.clone());
+				},
+				BackendPolicy::McpExtAuthz(p) => {
+					pol.mcp_ext_authz.get_or_insert_with(|| p.clone());
 				},
 			}
 		}

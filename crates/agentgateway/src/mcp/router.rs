@@ -108,6 +108,7 @@ impl App {
 			.mcp_authorization
 			.unwrap_or_else(|| McpAuthorizationSet::new(RuleSets::from(Vec::new())));
 		let authn = backend_policies.mcp_authentication;
+		let mcp_ext_authz = backend_policies.mcp_ext_authz;
 
 		// Store an empty value, we will populate each field async
 		let logy = log.mcp_status.clone();
@@ -116,6 +117,11 @@ impl App {
 
 		let mut ctx = ContextBuilder::new();
 		authorization_policies.register(&mut ctx);
+		if let Some(ea) = &mcp_ext_authz {
+			for expr in ea.expressions() {
+				ctx.register_expression(expr);
+			}
+		}
 		ctx.maybe_buffer_request_body(&mut req).await;
 
 		// `response` is not valid here, since we run authz first
@@ -142,6 +148,7 @@ impl App {
 					Relay::new(
 						backends.clone(),
 						authorization_policies.clone(),
+						mcp_ext_authz.clone(),
 						client.clone(),
 					)
 					.map_err(|e| Error::new(e.to_string()))
@@ -156,6 +163,7 @@ impl App {
 					Relay::new(
 						backends.clone(),
 						authorization_policies.clone(),
+						mcp_ext_authz.clone(),
 						client.clone(),
 					)
 					.map_err(|e| Error::new(e.to_string()))

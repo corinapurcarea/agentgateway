@@ -51,6 +51,13 @@ pub enum Error {
 	// Intentionally do NOT say its not authorized; we hide the existence of the tool
 	#[error("Unknown {1}: {2}")]
 	Authorization(RequestId, String, String),
+	#[error("external authorization denied")]
+	ExtAuthzDenied {
+		req_id: RequestId,
+		response_headers: ::http::HeaderMap,
+		status_code: ::http::StatusCode,
+		body: String,
+	},
 	#[error("failed to process session_id query parameter")]
 	InvalidSessionIdQuery,
 	#[error("failed to establish get stream: {0}")]

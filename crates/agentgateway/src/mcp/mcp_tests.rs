@@ -347,6 +347,329 @@ async fn authorization_denied_returns_unknown_resource_error() {
 	}
 }
 
+#[test]
+fn ext_authz_denied_error_maps_to_ext_auth_reason() {
+	use crate::proxy::{ProxyError, ProxyResponse, ProxyResponseReason};
+	use rmcp::model::RequestId;
+
+	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied {
+		req_id: RequestId::Number(1),
+		response_headers: http::HeaderMap::new(),
+		status_code: http::StatusCode::FORBIDDEN,
+		body: String::new(),
+	});
+	let resp = ProxyResponse::Error(err);
+	assert_eq!(
+		resp.as_reason(),
+		ProxyResponseReason::ExtAuth,
+		"ExtAuthzDenied should map to ExtAuth reason"
+	);
+}
+
+#[test]
+fn ext_authz_denied_error_produces_json_rpc_response() {
+	use crate::proxy::ProxyError;
+	use rmcp::model::RequestId;
+
+	let mut headers = http::HeaderMap::new();
+	headers.insert("x-custom", "test-value".parse().unwrap());
+
+	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied {
+		req_id: RequestId::Number(42),
+		response_headers: headers,
+		status_code: http::StatusCode::UNAUTHORIZED,
+		body: "insufficient permissions".to_string(),
+	});
+	let resp = err.into_response();
+	assert_eq!(
+		resp.status(),
+		http::StatusCode::UNAUTHORIZED,
+		"should propagate status_code from ext_authz DeniedResponse"
+	);
+	assert_eq!(
+		resp.headers().get("x-custom").unwrap().to_str().unwrap(),
+		"test-value"
+	);
+	assert_eq!(
+		resp.headers().get("content-type").unwrap().to_str().unwrap(),
+		"application/json"
+	);
+}
+
+#[test]
+fn mcp_ext_authz_denied_error_default() {
+	use crate::http::ext_authz::McpExtAuthzDenied;
+
+	let denied = McpExtAuthzDenied::default();
+	assert!(denied.response_headers.is_empty());
+	assert_eq!(denied.status_code, http::StatusCode::FORBIDDEN);
+	assert!(denied.body.is_empty());
+}
+
+#[test]
+fn cel_exec_wrapper_stores_extauthz_dynamic_metadata() {
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::rbac::CelExecWrapper;
+
+	let mut cel = CelExecWrapper::new(Arc::new(None));
+
+	let dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"role": "admin"})).unwrap();
+	cel.set_extauthz(dm);
+
+	let serialized = serde_json::to_value(cel.extauthz.as_ref().unwrap()).unwrap();
+	assert_eq!(serialized, serde_json::json!({"role": "admin"}));
+}
+
+#[test]
+fn mcp_authorization_validates_using_extauthz_metadata() {
+	use crate::http::authorization::{PolicySet, RuleSet, RuleSets};
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet, ResourceId, ResourceType};
+
+	// Allow rule: extauthz.tier == "premium"
+	let allow_expr =
+		Arc::new(cel::Expression::new_permissive(r#"extauthz.tier == "premium""#));
+	let policy_set = PolicySet::new(vec![allow_expr], vec![]);
+	let rule_set = RuleSet::new(policy_set);
+	let authz = McpAuthorizationSet::new(RuleSets::from(vec![rule_set]));
+
+	let resource = ResourceType::Tool(ResourceId::new(
+		"server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	// Without extauthz metadata -> should deny (allow rule can't match)
+	let cel_no_meta = CelExecWrapper::new(Arc::new(None));
+	assert!(
+		!authz.validate(&resource, &cel_no_meta),
+		"should deny when extauthz metadata is absent"
+	);
+
+	// With extauthz metadata that doesn't match -> should deny
+	let mut cel_wrong_meta = CelExecWrapper::new(Arc::new(None));
+	let wrong_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"tier": "basic"})).unwrap();
+	cel_wrong_meta.set_extauthz(wrong_dm);
+	assert!(
+		!authz.validate(&resource, &cel_wrong_meta),
+		"should deny when extauthz.tier != 'premium'"
+	);
+
+	// With extauthz metadata that matches -> should allow
+	let mut cel_match = CelExecWrapper::new(Arc::new(None));
+	let matching_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"tier": "premium"})).unwrap();
+	cel_match.set_extauthz(matching_dm);
+	assert!(
+		authz.validate(&resource, &cel_match),
+		"should allow when extauthz.tier == 'premium'"
+	);
+}
+
+#[test]
+fn extauthz_dynamic_metadata_merges_route_and_mcp_levels() {
+	use crate::cel::RequestSnapshot;
+	use crate::http::authorization::{PolicySet, RuleSet, RuleSets};
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet, ResourceId, ResourceType};
+
+	// Simulate route-level ext_authz returning {"tenant": "acme", "tier": "basic"}
+	let route_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"tenant": "acme", "tier": "basic"})).unwrap();
+
+	let snapshot = RequestSnapshot {
+		method: http::Method::POST,
+		path: http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: Some(route_dm),
+		extproc: None,
+		llm: None,
+	};
+
+	let mut cel = CelExecWrapper::new(Arc::new(Some(snapshot)));
+
+	// Simulate MCP-level ext_authz returning {"tier": "premium", "role": "admin"}
+	// "tier" should override route-level; "tenant" from route-level should be preserved
+	let mcp_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"tier": "premium", "role": "admin"})).unwrap();
+	cel.set_extauthz(mcp_dm);
+
+	let merged = serde_json::to_value(cel.extauthz.as_ref().unwrap()).unwrap();
+	assert_eq!(
+		merged,
+		serde_json::json!({"tenant": "acme", "tier": "premium", "role": "admin"}),
+		"should merge route-level and MCP-level metadata with MCP taking precedence"
+	);
+
+	// Verify CEL expressions can access both route-level and MCP-level keys
+	let resource = ResourceType::Tool(ResourceId::new(
+		"server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	// Allow rule that requires both route-level "tenant" and MCP-level "role"
+	let allow_expr = Arc::new(cel::Expression::new_permissive(
+		r#"extauthz.tenant == "acme" && extauthz.role == "admin""#,
+	));
+	let policy_set = PolicySet::new(vec![allow_expr], vec![]);
+	let rule_set = RuleSet::new(policy_set);
+	let authz = McpAuthorizationSet::new(RuleSets::from(vec![rule_set]));
+
+	assert!(
+		authz.validate(&resource, &cel),
+		"should allow when merged metadata satisfies rule referencing keys from both levels"
+	);
+}
+
+#[test]
+fn set_extauthz_without_snapshot_extauthz_stores_mcp_only() {
+	use crate::cel::RequestSnapshot;
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::rbac::CelExecWrapper;
+
+	let snapshot = RequestSnapshot {
+		method: http::Method::POST,
+		path: http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let mut cel = CelExecWrapper::new(Arc::new(Some(snapshot)));
+
+	let mcp_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"role": "admin"})).unwrap();
+	cel.set_extauthz(mcp_dm);
+
+	let serialized = serde_json::to_value(cel.extauthz.as_ref().unwrap()).unwrap();
+	assert_eq!(
+		serialized,
+		serde_json::json!({"role": "admin"}),
+		"should store MCP-only metadata when snapshot has no extauthz"
+	);
+}
+
+#[test]
+fn route_level_extauthz_preserved_when_no_mcp_extauthz() {
+	use crate::cel::RequestSnapshot;
+	use crate::http::authorization::{PolicySet, RuleSet, RuleSets};
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet, ResourceId, ResourceType};
+
+	let route_dm: ExtAuthzDynamicMetadata =
+		serde_json::from_value(serde_json::json!({"tenant": "acme"})).unwrap();
+
+	let snapshot = RequestSnapshot {
+		method: http::Method::POST,
+		path: http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: Some(route_dm),
+		extproc: None,
+		llm: None,
+	};
+
+	// Do NOT call set_extauthz -- simulates no MCP ext_authz configured
+	let cel = CelExecWrapper::new(Arc::new(Some(snapshot)));
+
+	let resource = ResourceType::Tool(ResourceId::new(
+		"server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	// Allow rule referencing route-level metadata
+	let allow_expr =
+		Arc::new(cel::Expression::new_permissive(r#"extauthz.tenant == "acme""#));
+	let policy_set = PolicySet::new(vec![allow_expr], vec![]);
+	let rule_set = RuleSet::new(policy_set);
+	let authz = McpAuthorizationSet::new(RuleSets::from(vec![rule_set]));
+
+	assert!(
+		authz.validate(&resource, &cel),
+		"route-level extauthz should be accessible when no MCP extauthz is set"
+	);
+}
+
+#[test]
+fn resource_type_serialization_all_variants() {
+	use crate::mcp::rbac::{ResourceId, ResourceType};
+
+	let tool = ResourceType::Tool(ResourceId::new("srv".to_string(), "my_tool".to_string()));
+	let tool_json = serde_json::to_value(&tool).unwrap();
+	assert_eq!(tool_json, serde_json::json!({"tool": {"target": "srv", "name": "my_tool"}}));
+
+	let prompt = ResourceType::Prompt(ResourceId::new("srv".to_string(), "summarize".to_string()));
+	let prompt_json = serde_json::to_value(&prompt).unwrap();
+	assert_eq!(
+		prompt_json,
+		serde_json::json!({"prompt": {"target": "srv", "name": "summarize"}})
+	);
+
+	let resource = ResourceType::Resource(ResourceId::new(
+		"default".to_string(),
+		"memo://insights".to_string(),
+	));
+	let resource_json = serde_json::to_value(&resource).unwrap();
+	assert_eq!(
+		resource_json,
+		serde_json::json!({"resource": {"target": "default", "name": "memo://insights"}})
+	);
+}
+
+#[test]
+fn mcp_ok_response_carries_dynamic_metadata() {
+	use crate::http::ext_authz::{ExtAuthzDynamicMetadata, McpExtAuthzOkResponse};
+
+	let dm: ExtAuthzDynamicMetadata = serde_json::from_value(serde_json::json!({
+		"request_id": "abc-123",
+		"tags": ["audit", "trace"]
+	}))
+	.unwrap();
+
+	let ok_resp = McpExtAuthzOkResponse {
+		dynamic_metadata: Some(dm),
+		..Default::default()
+	};
+
+	let meta_json = serde_json::to_value(ok_resp.dynamic_metadata.as_ref().unwrap()).unwrap();
+	assert_eq!(meta_json["request_id"], serde_json::json!("abc-123"));
+	assert_eq!(meta_json["tags"], serde_json::json!(["audit", "trace"]));
+	assert!(ok_resp.request_headers_to_add.is_empty());
+	assert!(ok_resp.request_headers_to_remove.is_empty());
+	assert!(ok_resp.response_headers_to_add.is_empty());
+}
+
 async fn standard_assertions(client: RunningService<RoleClient, InitializeRequestParams>) {
 	let tools = client.list_tools(None).await.unwrap();
 	let t = tools

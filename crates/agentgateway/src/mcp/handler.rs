@@ -44,6 +44,8 @@ fn resource_name(default_target_name: Option<&String>, target: &str, name: &str)
 pub struct Relay {
 	upstreams: Arc<upstream::UpstreamGroup>,
 	pub policies: McpAuthorizationSet,
+	mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+	client: PolicyClient,
 	// If we have 1 target only, we don't prefix everything with 'target_'.
 	// Else this is empty
 	default_target_name: Option<String>,
@@ -54,6 +56,7 @@ impl Relay {
 	pub fn new(
 		backend: McpBackendGroup,
 		policies: McpAuthorizationSet,
+		mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
 		client: PolicyClient,
 	) -> anyhow::Result<Self> {
 		let mut is_multiplexing = false;
@@ -66,8 +69,10 @@ impl Relay {
 			Some(backend.targets[0].name.to_string())
 		};
 		Ok(Self {
-			upstreams: Arc::new(upstream::UpstreamGroup::new(client, backend)?),
+			upstreams: Arc::new(upstream::UpstreamGroup::new(client.clone(), backend)?),
 			policies,
+			mcp_ext_authz,
+			client,
 			default_target_name,
 			is_multiplexing,
 		})
@@ -112,6 +117,34 @@ impl Relay {
 	}
 	pub fn default_target_name(&self) -> Option<String> {
 		self.default_target_name.clone()
+	}
+
+	/// Checks external authorization using the request snapshot from the CEL context.
+	/// On success, returns the ext_authz OkResponse containing headers to add/remove
+	/// on both the upstream request and the downstream response.
+	pub async fn check_ext_authz(
+		&self,
+		cel: &CelExecWrapper,
+		mcp: Option<&rbac::ResourceType>,
+	) -> Result<crate::http::ext_authz::McpExtAuthzOkResponse, UpstreamError> {
+		let Some(ea) = &self.mcp_ext_authz else {
+			return Ok(Default::default());
+		};
+		let Some(snapshot) = cel.snapshot() else {
+			tracing::warn!("mcp ext_authz: request snapshot unavailable, denying request");
+			return Err(UpstreamError::ExtAuthzDenied {
+				response_headers: Default::default(),
+				status_code: ::http::StatusCode::FORBIDDEN,
+				body: "external authorization denied".to_string(),
+			});
+		};
+		ea.check_mcp(self.client.clone(), snapshot, mcp)
+			.await
+			.map_err(|e| UpstreamError::ExtAuthzDenied {
+				response_headers: e.response_headers,
+				status_code: e.status_code,
+				body: e.body,
+			})
 	}
 
 	pub fn merge_tools(&self, cel: CelExecWrapper) -> Box<MergeFn> {

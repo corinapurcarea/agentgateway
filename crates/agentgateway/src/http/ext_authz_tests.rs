@@ -411,6 +411,285 @@ fn test_dynamic_metadata_extraction() {
 }
 
 #[test]
+fn test_dynamic_metadata_merge_disjoint_keys() {
+	let mut base = ExtAuthzDynamicMetadata::default();
+	base.0.insert("tenant".to_string(), serde_json::json!("acme"));
+	base.0.insert("region".to_string(), serde_json::json!("us-east"));
+
+	let mut other = ExtAuthzDynamicMetadata::default();
+	other.0.insert("role".to_string(), serde_json::json!("admin"));
+	other.0.insert("tier".to_string(), serde_json::json!("premium"));
+
+	base.merge(other);
+
+	assert_eq!(base.0.len(), 4);
+	assert_eq!(base.0.get("tenant").unwrap(), "acme");
+	assert_eq!(base.0.get("region").unwrap(), "us-east");
+	assert_eq!(base.0.get("role").unwrap(), "admin");
+	assert_eq!(base.0.get("tier").unwrap(), "premium");
+}
+
+#[test]
+fn test_dynamic_metadata_merge_overlapping_keys_other_wins() {
+	let mut base = ExtAuthzDynamicMetadata::default();
+	base.0.insert("tier".to_string(), serde_json::json!("basic"));
+	base.0.insert("tenant".to_string(), serde_json::json!("acme"));
+
+	let mut other = ExtAuthzDynamicMetadata::default();
+	other.0.insert("tier".to_string(), serde_json::json!("premium"));
+
+	base.merge(other);
+
+	assert_eq!(base.0.len(), 2);
+	assert_eq!(base.0.get("tier").unwrap(), "premium", "other should win on conflict");
+	assert_eq!(base.0.get("tenant").unwrap(), "acme");
+}
+
+#[test]
+fn test_dynamic_metadata_merge_empty_into_populated() {
+	let mut base = ExtAuthzDynamicMetadata::default();
+	base.0.insert("key".to_string(), serde_json::json!("value"));
+
+	let other = ExtAuthzDynamicMetadata::default();
+	base.merge(other);
+
+	assert_eq!(base.0.len(), 1);
+	assert_eq!(base.0.get("key").unwrap(), "value");
+}
+
+#[test]
+fn test_dynamic_metadata_merge_populated_into_empty() {
+	let mut base = ExtAuthzDynamicMetadata::default();
+
+	let mut other = ExtAuthzDynamicMetadata::default();
+	other.0.insert("key".to_string(), serde_json::json!("value"));
+
+	base.merge(other);
+
+	assert_eq!(base.0.len(), 1);
+	assert_eq!(base.0.get("key").unwrap(), "value");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_tool() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Tool(ResourceId::new(
+		"my_server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	let ea = ExtAuthz::default();
+	let metadata = ea.build_metadata_from_snapshot(
+		&None,
+		&snapshot,
+		Some(&resource),
+	);
+
+	let meta = metadata.expect("should produce metadata for MCP resource");
+	assert!(
+		meta.filter_metadata.contains_key("agentgateway.filters.mcp"),
+		"should contain agentgateway.filters.mcp key"
+	);
+	assert!(
+		!meta.filter_metadata.contains_key("envoy.filters.http.jwt_authn"),
+		"should not contain JWT key when no JWT claims"
+	);
+
+	let mcp_struct = meta.filter_metadata.get("agentgateway.filters.mcp").unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["tool"]["target"], "my_server");
+	assert_eq!(mcp_json["tool"]["name"], "my_tool");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_prompt() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Prompt(ResourceId::new(
+		"backend".to_string(),
+		"summarize".to_string(),
+	));
+
+	let ea = ExtAuthz::default();
+	let metadata = ea.build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	let mcp_struct = meta.filter_metadata.get("agentgateway.filters.mcp").unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["prompt"]["target"], "backend");
+	assert_eq!(mcp_json["prompt"]["name"], "summarize");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_resource() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Resource(ResourceId::new(
+		"default".to_string(),
+		"memo://insights".to_string(),
+	));
+
+	let ea = ExtAuthz::default();
+	let metadata = ea.build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	let mcp_struct = meta.filter_metadata.get("agentgateway.filters.mcp").unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["resource"]["target"], "default");
+	assert_eq!(mcp_json["resource"]["name"], "memo://insights");
+}
+
+#[test]
+fn test_build_metadata_no_mcp_no_jwt_returns_none() {
+	use crate::cel::RequestSnapshot;
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let ea = ExtAuthz::default();
+	let metadata = ea.build_metadata_from_snapshot(&None, &snapshot, None);
+
+	assert!(metadata.is_none(), "should return None when no MCP resource and no JWT");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_jwt_and_mcp_both_present() {
+	use crate::cel::RequestSnapshot;
+	use crate::http::jwt::Claims;
+	use crate::mcp::{ResourceId, ResourceType};
+	use secrecy::SecretString;
+
+	let mut claims_map = serde_json::Map::new();
+	claims_map.insert("sub".to_string(), serde_json::json!("user@example.com"));
+	claims_map.insert("iss".to_string(), serde_json::json!("https://auth.example.com"));
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: Some(Claims {
+			inner: claims_map,
+			jwt: SecretString::from("fake.jwt.token"),
+		}),
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Tool(ResourceId::new(
+		"server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	let ea = ExtAuthz::default();
+	let metadata = ea.build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	assert!(
+		meta.filter_metadata.contains_key("envoy.filters.http.jwt_authn"),
+		"should contain JWT metadata"
+	);
+	assert!(
+		meta.filter_metadata.contains_key("agentgateway.filters.mcp"),
+		"should contain MCP metadata"
+	);
+
+	let jwt_struct = meta.filter_metadata.get("envoy.filters.http.jwt_authn").unwrap();
+	let jwt_json = serde_json::to_value(jwt_struct).unwrap();
+	assert_eq!(jwt_json["jwt_payload"]["sub"], "user@example.com");
+
+	let mcp_struct = meta.filter_metadata.get("agentgateway.filters.mcp").unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["tool"]["name"], "my_tool");
+}
+
+#[test]
 fn test_append_action_append_if_exists_or_add() {
 	use crate::http::ext_authz::proto::header_value_option::HeaderAppendAction;
 

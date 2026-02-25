@@ -43,6 +43,23 @@ impl IncomingRequestContext {
 			claims,
 		}
 	}
+	pub fn merge_ext_authz_headers(
+		&mut self,
+		headers_to_add: http::HeaderMap,
+		headers_to_remove: &[String],
+	) {
+		for name in headers_to_remove {
+			if let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) {
+				self.headers.remove(&name);
+			}
+		}
+		for (name, value) in headers_to_add {
+			if let Some(name) = name {
+				self.headers.insert(name, value);
+			}
+		}
+	}
+
 	pub fn apply(&self, req: &mut http::Request) {
 		for (k, v) in &self.headers {
 			// Remove headers we do not want to propagate to the backend
@@ -65,6 +82,12 @@ pub enum UpstreamError {
 	Authorization {
 		resource_type: String,
 		resource_name: String,
+	},
+	#[error("external authorization denied")]
+	ExtAuthzDenied {
+		response_headers: ::http::HeaderMap,
+		status_code: ::http::StatusCode,
+		body: String,
 	},
 	#[error("invalid request: {0}")]
 	InvalidRequest(String),

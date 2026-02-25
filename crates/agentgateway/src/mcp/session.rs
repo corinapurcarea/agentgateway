@@ -26,6 +26,14 @@ use crate::mcp::{ClientError, MCPOperation, rbac};
 use crate::proxy::ProxyError;
 use crate::{mcp, *};
 
+fn apply_response_headers(resp: &mut Response, headers: ::http::HeaderMap) {
+	for (name, value) in headers {
+		if let Some(name) = name {
+			resp.headers_mut().append(name, value);
+		}
+	}
+}
+
 #[derive(Debug, Clone)]
 pub struct Session {
 	encoder: http::sessionpersistence::Encoder,
@@ -173,6 +181,20 @@ impl Session {
 			}) if req_id.is_some() => {
 				Err(mcp::Error::Authorization(req_id.unwrap(), resource_type, resource_name).into())
 			},
+			Err(UpstreamError::ExtAuthzDenied {
+				response_headers,
+				status_code,
+				body,
+			}) if req_id.is_some() => Err(mcp::Error::ExtAuthzDenied {
+				req_id: req_id.unwrap(),
+				response_headers,
+				status_code,
+				body,
+			}
+			.into()),
+			Err(UpstreamError::ExtAuthzDenied { .. }) => {
+				Err(ProxyError::ExternalAuthorizationFailed(None))
+			},
 			// TODO: this is too broad. We have a big tangle of errors to untangle though
 			Err(e) => Err(mcp::Error::SendError(req_id, e.to_string()).into()),
 		}
@@ -193,8 +215,8 @@ impl Session {
 		match message {
 			ClientJsonRpcMessage::Request(mut r) => {
 				let method = r.request.method();
-				let ctx = IncomingRequestContext::new(&parts);
-				let (_span, log, cel) = mcp::handler::setup_request_log(parts, method);
+				let mut ctx = IncomingRequestContext::new(&parts);
+				let (_span, log, mut cel) = mcp::handler::setup_request_log(parts, method);
 				let session_id = self.id.to_string();
 				log.non_atomic_mutate(|l| {
 					l.method_name = Some(method.to_string());
@@ -234,10 +256,20 @@ impl Session {
 						log.non_atomic_mutate(|l| {
 							l.resource = Some(MCPOperation::Tool);
 						});
-						self
+						let mut ea_ok = self.relay.check_ext_authz(&cel, None).await?;
+						if let Some(dm) = ea_ok.dynamic_metadata.take() {
+							cel.set_extauthz(dm);
+						}
+						ctx.merge_ext_authz_headers(
+							ea_ok.request_headers_to_add,
+							&ea_ok.request_headers_to_remove,
+						);
+						let mut resp = self
 							.relay
 							.send_fanout(r, ctx, self.relay.merge_tools(cel))
-							.await
+							.await?;
+						apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+						Ok(resp)
 					},
 					ClientRequest::PingRequest(_) | ClientRequest::SetLevelRequest(_) => {
 						self
@@ -249,20 +281,40 @@ impl Session {
 						log.non_atomic_mutate(|l| {
 							l.resource = Some(MCPOperation::Prompt);
 						});
-						self
+						let mut ea_ok = self.relay.check_ext_authz(&cel, None).await?;
+						if let Some(dm) = ea_ok.dynamic_metadata.take() {
+							cel.set_extauthz(dm);
+						}
+						ctx.merge_ext_authz_headers(
+							ea_ok.request_headers_to_add,
+							&ea_ok.request_headers_to_remove,
+						);
+						let mut resp = self
 							.relay
 							.send_fanout(r, ctx, self.relay.merge_prompts(cel))
-							.await
+							.await?;
+						apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+						Ok(resp)
 					},
 					ClientRequest::ListResourcesRequest(_) => {
 						if !self.relay.is_multiplexing() {
 							log.non_atomic_mutate(|l| {
 								l.resource = Some(MCPOperation::Resource);
 							});
-							self
+							let mut ea_ok = self.relay.check_ext_authz(&cel, None).await?;
+							if let Some(dm) = ea_ok.dynamic_metadata.take() {
+								cel.set_extauthz(dm);
+							}
+							ctx.merge_ext_authz_headers(
+								ea_ok.request_headers_to_add,
+								&ea_ok.request_headers_to_remove,
+							);
+							let mut resp = self
 								.relay
 								.send_fanout(r, ctx, self.relay.merge_resources(cel))
-								.await
+								.await?;
+							apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+							Ok(resp)
 						} else {
 							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
 							// Find a mapping of URL
@@ -276,10 +328,20 @@ impl Session {
 							log.non_atomic_mutate(|l| {
 								l.resource = Some(MCPOperation::ResourceTemplates);
 							});
-							self
+							let mut ea_ok = self.relay.check_ext_authz(&cel, None).await?;
+							if let Some(dm) = ea_ok.dynamic_metadata.take() {
+								cel.set_extauthz(dm);
+							}
+							ctx.merge_ext_authz_headers(
+								ea_ok.request_headers_to_add,
+								&ea_ok.request_headers_to_remove,
+							);
+							let mut resp = self
 								.relay
 								.send_fanout(r, ctx, self.relay.merge_resource_templates(cel))
-								.await
+								.await?;
+							apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+							Ok(resp)
 						} else {
 							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
 							// Find a mapping of URL
@@ -296,22 +358,33 @@ impl Session {
 							l.target_name = Some(service_name.to_string());
 							l.resource = Some(MCPOperation::Tool);
 						});
-						if !self.relay.policies.validate(
-							&rbac::ResourceType::Tool(rbac::ResourceId::new(
-								service_name.to_string(),
-								tool.to_string(),
-							)),
-							&cel,
-						) {
+						let resource_type = rbac::ResourceType::Tool(rbac::ResourceId::new(
+							service_name.to_string(),
+							tool.to_string(),
+						));
+						let mut ea_ok = self
+							.relay
+							.check_ext_authz(&cel, Some(&resource_type))
+							.await?;
+						if let Some(dm) = ea_ok.dynamic_metadata.take() {
+							cel.set_extauthz(dm);
+						}
+						if !self.relay.policies.validate(&resource_type, &cel) {
 							return Err(UpstreamError::Authorization {
 								resource_type: "tool".to_string(),
 								resource_name: name.to_string(),
 							});
 						}
 
+						ctx.merge_ext_authz_headers(
+							ea_ok.request_headers_to_add,
+							&ea_ok.request_headers_to_remove,
+						);
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
-						self.relay.send_single(r, ctx, service_name).await
+						let mut resp = self.relay.send_single(r, ctx, service_name).await?;
+						apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+						Ok(resp)
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();
@@ -321,20 +394,31 @@ impl Session {
 							l.resource_name = Some(prompt.to_string());
 							l.resource = Some(MCPOperation::Prompt);
 						});
-						if !self.relay.policies.validate(
-							&rbac::ResourceType::Prompt(rbac::ResourceId::new(
-								service_name.to_string(),
-								prompt.to_string(),
-							)),
-							&cel,
-						) {
+						let resource_type = rbac::ResourceType::Prompt(rbac::ResourceId::new(
+							service_name.to_string(),
+							prompt.to_string(),
+						));
+						let mut ea_ok = self
+							.relay
+							.check_ext_authz(&cel, Some(&resource_type))
+							.await?;
+						if let Some(dm) = ea_ok.dynamic_metadata.take() {
+							cel.set_extauthz(dm);
+						}
+						if !self.relay.policies.validate(&resource_type, &cel) {
 							return Err(UpstreamError::Authorization {
 								resource_type: "prompt".to_string(),
 								resource_name: name.to_string(),
 							});
 						}
+						ctx.merge_ext_authz_headers(
+							ea_ok.request_headers_to_add,
+							&ea_ok.request_headers_to_remove,
+						);
 						gpr.params.name = prompt.to_string();
-						self.relay.send_single(r, ctx, service_name).await
+						let mut resp = self.relay.send_single(r, ctx, service_name).await?;
+						apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
+						Ok(resp)
 					},
 					ClientRequest::ReadResourceRequest(rrr) => {
 						if let Some(service_name) = self.relay.default_target_name() {
@@ -344,19 +428,34 @@ impl Session {
 								l.resource_name = Some(uri.to_string());
 								l.resource = Some(MCPOperation::Resource);
 							});
-							if !self.relay.policies.validate(
-								&rbac::ResourceType::Resource(rbac::ResourceId::new(
-									service_name.to_string(),
-									uri.to_string(),
-								)),
-								&cel,
-							) {
+							let resource_type = rbac::ResourceType::Resource(rbac::ResourceId::new(
+								service_name.to_string(),
+								uri.to_string(),
+							));
+							let mut ea_ok = self
+								.relay
+								.check_ext_authz(&cel, Some(&resource_type))
+								.await?;
+							if let Some(dm) = ea_ok.dynamic_metadata.take() {
+								cel.set_extauthz(dm);
+							}
+							if !self.relay.policies.validate(&resource_type, &cel) {
 								return Err(UpstreamError::Authorization {
 									resource_type: "resource".to_string(),
 									resource_name: uri.to_string(),
 								});
 							}
-							self.relay.send_single_without_multiplexing(r, ctx).await
+							ctx.merge_ext_authz_headers(
+								ea_ok.request_headers_to_add,
+								&ea_ok.request_headers_to_remove,
+							);
+							let mut resp =
+								self.relay.send_single_without_multiplexing(r, ctx).await?;
+							apply_response_headers(
+								&mut resp,
+								ea_ok.response_headers_to_add,
+							);
+							Ok(resp)
 						} else {
 							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
 							// Find a mapping of URL

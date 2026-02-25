@@ -21,11 +21,36 @@ impl McpAuthorization {
 	}
 }
 
-pub struct CelExecWrapper(Arc<Option<RequestSnapshot>>);
+pub struct CelExecWrapper {
+	snapshot: Arc<Option<RequestSnapshot>>,
+	pub(crate) extauthz: Option<crate::http::ext_authz::ExtAuthzDynamicMetadata>,
+}
 
 impl CelExecWrapper {
 	pub fn new(snap: Arc<Option<RequestSnapshot>>) -> CelExecWrapper {
-		CelExecWrapper(snap)
+		CelExecWrapper {
+			snapshot: snap,
+			extauthz: None,
+		}
+	}
+
+	pub fn snapshot(&self) -> Option<&RequestSnapshot> {
+		self.snapshot.as_ref().as_ref()
+	}
+
+	pub fn set_extauthz(&mut self, mcp_metadata: crate::http::ext_authz::ExtAuthzDynamicMetadata) {
+		if let Some(snapshot_dm) = self
+			.snapshot
+			.as_ref()
+			.as_ref()
+			.and_then(|s| s.extauthz.as_ref())
+		{
+			let mut merged = snapshot_dm.clone();
+			merged.merge(mcp_metadata);
+			self.extauthz = Some(merged);
+		} else {
+			self.extauthz = Some(mcp_metadata);
+		}
 	}
 }
 #[derive(Clone, Debug)]
@@ -37,7 +62,10 @@ impl McpAuthorizationSet {
 	}
 	pub fn validate(&self, res: &ResourceType, cel: &CelExecWrapper) -> bool {
 		tracing::debug!("Checking RBAC for resource: {:?}", res);
-		let exec = crate::cel::Executor::new_mcp(cel.0.as_ref().as_ref(), res);
+		let mut exec = crate::cel::Executor::new_mcp(cel.snapshot.as_ref().as_ref(), res);
+		if let Some(dm) = cel.extauthz.as_ref() {
+			exec.extauthz = crate::cel::ExtensionOrDirect::Direct(Some(dm));
+		}
 		self.0.validate(&exec)
 	}
 
