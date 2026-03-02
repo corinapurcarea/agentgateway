@@ -5,6 +5,7 @@ use crate::cel::RequestSnapshot;
 use crate::http::Response;
 use crate::http::jwt::Claims;
 use crate::http::sessionpersistence::MCPSession;
+use crate::mcp;
 use crate::mcp::mergestream::MergeFn;
 use crate::mcp::rbac::{CelExecWrapper, Identity, McpAuthorizationSet};
 use crate::mcp::router::McpBackendGroup;
@@ -46,10 +47,19 @@ pub struct Relay {
 	pub policies: McpAuthorizationSet,
 	mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
 	client: PolicyClient,
-	// If we have 1 target only, we don't prefix everything with 'target_'.
-	// Else this is empty
-	default_target_name: Option<String>,
-	is_multiplexing: bool,
+}
+
+pub struct RelayInputs {
+	pub backend: McpBackendGroup,
+	pub policies: McpAuthorizationSet,
+	pub mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+	pub client: PolicyClient,
+}
+
+impl RelayInputs {
+	pub fn build_new_connections(self) -> Result<Relay, mcp::Error> {
+		Relay::new(self.backend, self.policies, self.mcp_ext_authz, self.client)
+	}
 }
 
 impl Relay {
@@ -58,31 +68,28 @@ impl Relay {
 		policies: McpAuthorizationSet,
 		mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
 		client: PolicyClient,
-	) -> anyhow::Result<Self> {
-		let mut is_multiplexing = false;
-		let default_target_name = if backend.targets.len() != 1 {
-			is_multiplexing = true;
-			None
-		} else if backend.targets[0].always_use_prefix {
-			None
-		} else {
-			Some(backend.targets[0].name.to_string())
-		};
+	) -> Result<Self, mcp::Error> {
 		Ok(Self {
 			upstreams: Arc::new(upstream::UpstreamGroup::new(client.clone(), backend)?),
 			policies,
 			mcp_ext_authz,
 			client,
-			default_target_name,
-			is_multiplexing,
 		})
+	}
+	pub fn with_policies(&self, policies: McpAuthorizationSet) -> Self {
+		Self {
+			upstreams: self.upstreams.clone(),
+			policies,
+			mcp_ext_authz: self.mcp_ext_authz.clone(),
+			client: self.client.clone(),
+		}
 	}
 
 	pub fn parse_resource_name<'a, 'b: 'a>(
 		&'a self,
 		res: &'b str,
 	) -> Result<(&'a str, &'b str), UpstreamError> {
-		if let Some(default) = self.default_target_name.as_ref() {
+		if let Some(default) = self.upstreams.default_target_name.as_ref() {
 			Ok((default.as_str(), res))
 		} else {
 			res
@@ -92,9 +99,7 @@ impl Relay {
 				))
 		}
 	}
-}
 
-impl Relay {
 	pub fn get_sessions(&self) -> Option<Vec<MCPSession>> {
 		let mut sessions = Vec::with_capacity(self.upstreams.size());
 		for (_, us) in self.upstreams.iter_named() {
@@ -105,7 +110,7 @@ impl Relay {
 
 	pub fn set_sessions(&self, sessions: Vec<MCPSession>) {
 		for ((_, us), session) in self.upstreams.iter_named().zip(sessions) {
-			us.set_session_id(&session.session, session.backend);
+			us.set_session_id(session.session.as_deref(), session.backend);
 		}
 	}
 	pub fn count(&self) -> usize {
@@ -113,10 +118,10 @@ impl Relay {
 	}
 
 	pub fn is_multiplexing(&self) -> bool {
-		self.is_multiplexing
+		self.upstreams.is_multiplexing
 	}
 	pub fn default_target_name(&self) -> Option<String> {
-		self.default_target_name.clone()
+		self.upstreams.default_target_name.clone()
 	}
 
 	/// Checks external authorization using the request snapshot from the CEL context.
@@ -149,7 +154,7 @@ impl Relay {
 
 	pub fn merge_tools(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
-		let default_target_name = self.default_target_name.clone();
+		let default_target_name = self.upstreams.default_target_name.clone();
 		Box::new(move |streams| {
 			let tools = streams
 				.into_iter()
@@ -219,7 +224,7 @@ impl Relay {
 
 	pub fn merge_prompts(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		let policies = self.policies.clone();
-		let default_target_name = self.default_target_name.clone();
+		let default_target_name = self.upstreams.default_target_name.clone();
 		Box::new(move |streams| {
 			let prompts = streams
 				.into_iter()
@@ -354,7 +359,7 @@ impl Relay {
 		r: JsonRpcRequest<ClientRequest>,
 		ctx: IncomingRequestContext,
 	) -> Result<Response, UpstreamError> {
-		let Some(service_name) = &self.default_target_name else {
+		let Some(service_name) = &self.upstreams.default_target_name else {
 			return Err(UpstreamError::InvalidMethod(r.request.method().to_string()));
 		};
 		self.send_single(r, ctx, service_name).await
@@ -506,7 +511,7 @@ fn messages_to_response(
 			message: Arc::new(r),
 		}
 	});
-	Ok(crate::mcp::session::sse_stream_response(stream, None))
+	Ok(mcp::session::sse_stream_response(stream, None))
 }
 
 fn accepted_response() -> Response {

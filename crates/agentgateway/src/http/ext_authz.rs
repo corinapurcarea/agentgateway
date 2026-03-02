@@ -23,8 +23,8 @@ use crate::mcp::ResourceType;
 use crate::proxy::ProxyError;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
-use crate::types::agent::SimpleBackendReference;
-use crate::{serde_dur_option, *};
+use crate::types::agent::{BackendPolicy, SimpleBackendReference};
+use crate::*;
 #[cfg(test)]
 #[path = "ext_authz_tests.rs"]
 mod tests;
@@ -154,6 +154,14 @@ pub struct ExtAuthz {
 	/// Reference to the external authorization service backend
 	#[serde(flatten)]
 	pub target: Arc<SimpleBackendReference>,
+	/// Policies to connect to the backend
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "Option<crate::types::local::SimpleLocalBackendPolicies>")
+	)]
+	pub policies: Vec<BackendPolicy>,
 	/// The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.
 	#[serde(default)]
 	pub protocol: Protocol,
@@ -167,14 +175,6 @@ pub struct ExtAuthz {
 	/// Options for including the request body in the authorization request
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub include_request_body: Option<BodyOptions>,
-	/// Timeout for the authorization request (default: 200ms)
-	#[serde(
-		default,
-		skip_serializing_if = "Option::is_none",
-		with = "serde_dur_option"
-	)]
-	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
-	pub timeout: Option<Duration>,
 }
 
 impl ExtAuthz {
@@ -251,9 +251,8 @@ impl ExtAuthz {
 		};
 		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
+			policies: self.policies.clone(),
 			client,
-			// Set the request timeout. This can be overridden by a timeout on the Backend object itself.
-			timeout: Some(self.timeout.unwrap_or(Duration::from_millis(200))),
 		};
 		let mut grpc_client = AuthorizationClient::new(chan);
 		// Get connection info with proper error handling
@@ -625,11 +624,10 @@ impl ExtAuthz {
 			let resv = http::HeaderOrPseudoValue::from_cel_result(hn, res);
 			http::RequestOrResponse::Request(&mut check_req).apply_header(hn, resv, false);
 		}
-		// Set the request timeout. This can be overridden by a timeout on the Backend object itself.
-		let timeout_duration = self.timeout.unwrap_or(Duration::from_millis(200));
+		// Set the default request timeout. This can be overridden by a timeout on the Backend object itself.
 		check_req
 			.extensions_mut()
-			.insert(BackendRequestTimeout(timeout_duration));
+			.insert(BackendRequestTimeout(Duration::from_millis(200)));
 		let resp = client.call_reference(check_req, &self.target).await;
 		let mut resp = match resp {
 			Ok(r) => r,
@@ -728,8 +726,8 @@ impl ExtAuthz {
 
 		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
+			policies: self.policies.clone(),
 			client,
-			timeout: Some(self.timeout.unwrap_or(Duration::from_millis(200))),
 		};
 		let mut grpc_client = AuthorizationClient::new(chan);
 

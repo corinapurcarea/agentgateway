@@ -17,7 +17,7 @@ use prometheus_client::encoding::EncodeLabelValue;
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls_pemfile::Item;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 
 use crate::http::auth::BackendAuth;
@@ -1166,37 +1166,9 @@ pub struct StreamableHTTPTargetSpec {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct OpenAPITarget {
 	pub backend: SimpleBackendReference,
-	#[serde(deserialize_with = "de_openapi")]
+	#[serde(skip_serializing)]
 	#[cfg_attr(feature = "schema", schemars(with = "serde_json::value::RawValue"))]
 	pub schema: Arc<OpenAPI>,
-}
-
-pub fn de_openapi<'a, D>(deserializer: D) -> Result<Arc<OpenAPI>, D::Error>
-where
-	D: serde::Deserializer<'a>,
-{
-	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-	#[serde(rename_all = "camelCase", deny_unknown_fields)]
-	enum Serde {
-		File(PathBuf),
-		Inline(String),
-		// Remote()
-	}
-	let s = Serde::deserialize(deserializer)?;
-
-	let s = match s {
-		Serde::File(f) => {
-			let f = std::fs::read(f).map_err(serde::de::Error::custom)?;
-			String::from_utf8(f).map_err(serde::de::Error::custom)?
-		},
-		Serde::Inline(s) => s,
-	};
-	// OpenAPI can be huge, so grow our stack
-	let schema: OpenAPI = stacker::grow(2 * 1024 * 1024, || {
-		yamlviajson::from_str(s.as_str()).map_err(serde::de::Error::custom)
-	})?;
-
-	Ok(Arc::new(schema))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1643,6 +1615,14 @@ pub struct TargetedPolicy {
 pub struct TracingConfig {
 	#[serde(flatten)]
 	pub provider_backend: SimpleBackendReference,
+	/// Policies to connect to the backend
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "Option<crate::types::local::SimpleLocalBackendPolicies>")
+	)]
+	pub policies: Vec<BackendPolicy>,
 	/// Span attributes to add, keyed by attribute name.
 	#[serde(default)]
 	pub attributes: OrderedStringMap<Arc<cel::Expression>>,
@@ -2020,6 +2000,8 @@ pub struct LocalMcpAuthentication {
 	pub jwks: FileInlineOrRemote,
 	#[serde(default)]
 	pub mode: McpAuthenticationMode,
+	#[serde(default)]
+	pub jwt_validation_options: http::jwt::JWTValidationOptions,
 }
 
 impl LocalMcpAuthentication {
@@ -2047,6 +2029,7 @@ impl LocalMcpAuthentication {
 			issuer: self.issuer.clone(),
 			audiences: Some(self.audiences.clone()),
 			jwks,
+			jwt_validation_options: self.jwt_validation_options.clone(),
 		})
 	}
 
@@ -2474,5 +2457,104 @@ InvalidKeyData
 			.get_hostname(&HostnameMatchRef::Exact("old.example.com"))
 			.expect("route should be present");
 		assert_eq!(got.key, strng::new("tcp-2"));
+	}
+
+	#[test]
+	fn test_local_mcp_authentication_default_jwt_validation_options() {
+		let yaml = r#"
+issuer: "https://example.com"
+audiences: ["aud1"]
+jwks: '{"keys":[]}'
+resourceMetadata:
+  mcpResourceUri: "mcp://test"
+"#;
+		let auth: LocalMcpAuthentication = serde_yaml::from_str(yaml).unwrap();
+		assert_eq!(
+			auth.jwt_validation_options.required_claims,
+			std::collections::HashSet::from(["exp".to_owned()]),
+			"default required_claims should be [\"exp\"]"
+		);
+	}
+
+	#[test]
+	fn test_local_mcp_authentication_jwt_validation_options_present_but_required_claims_missing() {
+		let yaml = r#"
+issuer: "https://example.com"
+audiences: ["aud1"]
+jwks: '{"keys":[]}'
+resourceMetadata:
+  mcpResourceUri: "mcp://test"
+jwtValidationOptions: {}
+"#;
+		let auth: LocalMcpAuthentication = serde_yaml::from_str(yaml).unwrap();
+		assert_eq!(
+			auth.jwt_validation_options.required_claims,
+			std::collections::HashSet::from(["exp".to_owned()]),
+			"omitted requiredClaims should default to [\"exp\"]"
+		);
+	}
+
+	#[test]
+	fn test_local_mcp_authentication_with_empty_required_claims() {
+		let yaml = r#"
+issuer: "https://enterprise-idp.example.com"
+audiences: ["enterprise-aud"]
+jwks: '{"keys":[]}'
+resourceMetadata:
+  mcpResourceUri: "mcp://test"
+jwtValidationOptions:
+  requiredClaims: []
+"#;
+		let auth: LocalMcpAuthentication = serde_yaml::from_str(yaml).unwrap();
+		assert!(
+			auth.jwt_validation_options.required_claims.is_empty(),
+			"required_claims should be empty"
+		);
+	}
+
+	#[test]
+	fn test_local_mcp_authentication_with_custom_required_claims() {
+		let yaml = r#"
+issuer: "https://enterprise-idp.example.com"
+audiences: ["enterprise-aud"]
+jwks: '{"keys":[]}'
+resourceMetadata:
+  mcpResourceUri: "mcp://test"
+jwtValidationOptions:
+  requiredClaims: ["exp", "nbf"]
+"#;
+		let auth: LocalMcpAuthentication = serde_yaml::from_str(yaml).unwrap();
+		assert_eq!(
+			auth.jwt_validation_options.required_claims,
+			std::collections::HashSet::from(["exp".to_owned(), "nbf".to_owned()])
+		);
+	}
+
+	#[test]
+	fn test_local_mcp_authentication_as_jwt_propagates_jwt_validation_options() {
+		let yaml = r#"
+issuer: "https://enterprise-idp.example.com"
+audiences: ["enterprise-aud"]
+jwks: '{"keys":[]}'
+resourceMetadata:
+  mcpResourceUri: "mcp://test"
+jwtValidationOptions:
+  requiredClaims: []
+"#;
+		let auth: LocalMcpAuthentication = serde_yaml::from_str(yaml).unwrap();
+		let jwt_config = auth.as_jwt().unwrap();
+
+		match jwt_config {
+			http::jwt::LocalJwtConfig::Single {
+				jwt_validation_options,
+				..
+			} => {
+				assert!(
+					jwt_validation_options.required_claims.is_empty(),
+					"jwt_validation_options should be propagated to LocalJwtConfig"
+				);
+			},
+			_ => panic!("Expected LocalJwtConfig::Single"),
+		}
 	}
 }

@@ -199,12 +199,20 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 		})?;
 
 		let audiences = (!m.audiences.is_empty()).then(|| m.audiences.clone());
-		let jwt_provider = http::jwt::Provider::from_jwks(jwk_set, m.issuer.clone(), audiences)
-			.map_err(|e| {
-				ProtoError::Generic(format!(
-					"failed to create JWT provider for MCP Authentication: {e}"
-				))
-			})?;
+		let jwt_validation_options = m
+			.jwt_validation_options
+			.as_ref()
+			.map(|vo| http::jwt::JWTValidationOptions {
+				required_claims: vo.required_claims.iter().cloned().collect(),
+			})
+			.unwrap_or_default();
+		let jwt_provider =
+			http::jwt::Provider::from_jwks(jwk_set, m.issuer.clone(), audiences, jwt_validation_options)
+				.map_err(|e| {
+					ProtoError::Generic(format!(
+						"failed to create JWT provider for MCP Authentication: {e}"
+					))
+				})?;
 
 		let mode = match proto::agent::backend_policy_spec::mcp_authentication::Mode::try_from(m.mode)
 			.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
@@ -411,6 +419,19 @@ fn convert_backend_ai_policy(
 				.map(|(k, v)| serde_json::from_str(v).map(|v| (k.clone(), v)))
 				.collect::<Result<_, _>>()?,
 		),
+		transformations: if ai.transformations.is_empty() {
+			None
+		} else {
+			Some(
+				ai.transformations
+					.iter()
+					.map(|(k, v)| {
+						let ve = cel::Expression::new_permissive(v);
+						Ok::<_, ProtoError>((k.to_owned(), Arc::new(ve)))
+					})
+					.collect::<Result<_, _>>()?,
+			)
+		},
 		prompts: ai.prompts.as_ref().map(convert_prompt_enrichment),
 		model_aliases: ai
 			.model_aliases
@@ -1194,7 +1215,6 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 							allow_partial_message: body_opts.allow_partial_message,
 							pack_as_bytes: body_opts.pack_as_bytes,
 						});
-				let timeout = ea.timeout.map(convert_duration);
 				let protocol = match ea
 					.protocol
 					.as_ref()
@@ -1257,6 +1277,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 				TrafficPolicy::ExtAuthz(http::ext_authz::ExtAuthz {
 					protocol,
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					failure_mode,
 					include_request_headers: ea
 						.include_request_headers
@@ -1272,7 +1294,6 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						)
 						.collect(),
 					include_request_body,
-					timeout,
 				})
 			},
 			Some(tps::Kind::Authorization(rbac)) => {
@@ -1305,8 +1326,20 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						} else {
 							Some(p.audiences.clone())
 						};
-						http::jwt::Provider::from_jwks(jwk_set, p.issuer.clone(), audiences)
-							.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))
+						let jwt_validation_options = p
+							.jwt_validation_options
+							.as_ref()
+							.map(|vo| http::jwt::JWTValidationOptions {
+								required_claims: vo.required_claims.iter().cloned().collect(),
+							})
+							.unwrap_or_default();
+						http::jwt::Provider::from_jwks(
+							jwk_set,
+							p.issuer.clone(),
+							audiences,
+							jwt_validation_options,
+						)
+						.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))
 					})
 					.collect::<Result<Vec<_>, _>>()?;
 				let jwt_auth = http::jwt::Jwt::from_providers(providers, mode);
@@ -1353,12 +1386,20 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						"remote_rate_limit: target must be set".into(),
 					));
 				}
+				let failure_mode = match tps::remote_rate_limit::FailureMode::try_from(rrl.failure_mode) {
+					Ok(tps::remote_rate_limit::FailureMode::FailOpen) => {
+						http::remoteratelimit::FailureMode::FailOpen
+					},
+					// Default to FailClosed (proto default is FAIL_CLOSED = 0)
+					_ => http::remoteratelimit::FailureMode::FailClosed,
+				};
 				TrafficPolicy::RemoteRateLimit(http::remoteratelimit::RemoteRateLimit {
 					domain: rrl.domain.clone(),
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
-					// Not supported over XDS; use a timeout on the backend itself
-					timeout: None,
+					failure_mode,
 				})
 			},
 			Some(tps::Kind::Csrf(csrf_spec)) => {
@@ -1388,6 +1429,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 				}
 				TrafficPolicy::ExtProc(http::ext_proc::ExtProc {
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					failure_mode,
 					request_attributes: to_cel_attrs(&ep.request_attributes),
 					response_attributes: to_cel_attrs(&ep.response_attributes),
@@ -1740,6 +1783,8 @@ impl TryFrom<&proto::agent::frontend_policy_spec::Tracing> for types::agent::Tra
 
 		Ok(types::agent::TracingConfig {
 			provider_backend,
+			// Not supported inline from xDS
+			policies: Vec::new(),
 			attributes,
 			resources,
 			remove: t.remove.clone(),
@@ -2107,6 +2152,12 @@ mod tests {
 				]
 				.into_iter()
 				.collect(),
+				transformations: vec![(
+					"system".to_string(),
+					"\"Always answer in JSON\"".to_string(),
+				)]
+				.into_iter()
+				.collect(),
 				prompt_guard: None,
 				prompts: None,
 				model_aliases: Default::default(),
@@ -2131,6 +2182,10 @@ mod tests {
 				.overrides
 				.as_ref()
 				.expect("overrides should be set");
+			let transformation_policy = ai_policy
+				.transformations
+				.as_ref()
+				.expect("transformation_policy should be set");
 
 			// Verify defaults have correct types and values
 			let temp_val = defaults.get("temperature").unwrap();
@@ -2157,6 +2212,7 @@ mod tests {
 			let array_val = overrides.get("array_value").unwrap();
 			assert!(array_val.is_array(), "array_value should be an array");
 			assert_eq!(array_val, &json!([1, 2, 3]));
+			assert!(transformation_policy.get("system").is_some());
 
 			// Verify routes conversion
 			assert_eq!(ai_policy.routes.len(), 2);

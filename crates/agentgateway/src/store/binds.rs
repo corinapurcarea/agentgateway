@@ -307,6 +307,10 @@ impl LLMRequestPolicies {
 			prompt_guard: be.prompt_guard.clone().or_else(|| re.prompt_guard.clone()),
 			defaults: be.defaults.clone().or_else(|| re.defaults.clone()),
 			overrides: be.overrides.clone().or_else(|| re.overrides.clone()),
+			transformations: be
+				.transformations
+				.clone()
+				.or_else(|| re.transformations.clone()),
 			prompts: be.prompts.clone().or_else(|| re.prompts.clone()),
 			model_aliases: merged_aliases,
 			wildcard_patterns: merged_wildcard_patterns,
@@ -888,8 +892,10 @@ impl Store {
 			let mut bind = Arc::unwrap_or_clone(b.clone());
 			// If this is a listener update, copy things over
 			if let Some(old) = bind.listeners.remove(&lis.key) {
-				debug!("listener update, copy old routes over");
-				lis.routes = Arc::unwrap_or_clone(old).routes;
+				debug!("listener update, copy old routes and tcp routes over");
+				let old = Arc::unwrap_or_clone(old);
+				lis.routes = old.routes;
+				lis.tcp_routes = old.tcp_routes;
 			}
 			// Insert any staged routes
 			for (k, v) in self.staged_routes.remove(&lis.key).into_iter().flatten() {

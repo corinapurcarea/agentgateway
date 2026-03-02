@@ -1,21 +1,24 @@
 apiVersion: gateway.networking.k8s.io/v1
-kind: GRPCRoute
+kind: HTTPRoute
 metadata:
-  name: example-grpc-route
+  name: test-route
   namespace: default
 spec:
   parentRefs:
-    - name: test-gateway
+  - name: test-gateway
+  hostnames:
+  - example.com
   rules:
-    - matches:
-        - method:
-            service: "example.grpc.Service"
-            method: "ExampleMethod"
-      backendRefs:
-        - name: example-configmap # Referencing a ConfigMap, which is invalid
-          kind: ConfigMap
-          group: ""
-          port: 9000
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api1
+    - path:
+        type: PathPrefix
+        value: /api2
+    backendRefs:
+    - name: test-service
+      port: 80
 ---
 # Output
 output:
@@ -25,21 +28,30 @@ output:
   resource:
     route:
       backends:
-      - {}
-      key: default/example-grpc-route.0.grpc.http
+      - backend:
+          port: 80
+          service:
+            hostname: test-service.default.svc.cluster.local
+            namespace: default
+        weight: 1
+      hostnames:
+      - example.com
+      key: default/test-route.0.http
       listenerKey: default/test-gateway.http
       matches:
       - path:
-          exact: /example.grpc.Service/ExampleMethod
+          pathPrefix: /api1
+      - path:
+          pathPrefix: /api2
       name:
-        kind: GRPCRoute
-        name: example-grpc-route
+        kind: HTTPRoute
+        name: test-route
         namespace: default
 status:
 - apiVersion: gateway.networking.k8s.io/v1
-  kind: GRPCRoute
+  kind: HTTPRoute
   metadata:
-    name: example-grpc-route
+    name: test-route
     namespace: default
   spec: null
   status:
@@ -51,9 +63,9 @@ status:
         status: "True"
         type: Accepted
       - lastTransitionTime: fake
-        message: 'referencing unsupported backendRef: group "" kind "ConfigMap"'
-        reason: InvalidKind
-        status: "False"
+        message: ""
+        reason: ResolvedRefs
+        status: "True"
         type: ResolvedRefs
       controllerName: agentgateway.dev/agentgateway
       parentRef:
