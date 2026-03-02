@@ -989,7 +989,7 @@ struct FilterOrPolicy {
 	mcp_authentication: Option<LocalMcpAuthentication>,
 	/// Authenticate MCP requests by calling an external authorization server, with MCP context.
 	#[serde(default)]
-	mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+	mcp_ext_authz: Option<crate::mcp::ext_authz::McpExtAuthz>,
 	/// Mark this traffic as A2A to enable A2A processing and telemetry.
 	#[serde(default)]
 	a2a: Option<A2aPolicy>,

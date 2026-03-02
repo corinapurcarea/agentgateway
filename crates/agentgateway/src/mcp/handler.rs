@@ -45,14 +45,14 @@ fn resource_name(default_target_name: Option<&String>, target: &str, name: &str)
 pub struct Relay {
 	upstreams: Arc<upstream::UpstreamGroup>,
 	pub policies: McpAuthorizationSet,
-	mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+	mcp_ext_authz: Option<crate::mcp::ext_authz::McpExtAuthz>,
 	client: PolicyClient,
 }
 
 pub struct RelayInputs {
 	pub backend: McpBackendGroup,
 	pub policies: McpAuthorizationSet,
-	pub mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+	pub mcp_ext_authz: Option<crate::mcp::ext_authz::McpExtAuthz>,
 	pub client: PolicyClient,
 }
 
@@ -66,7 +66,7 @@ impl Relay {
 	pub fn new(
 		backend: McpBackendGroup,
 		policies: McpAuthorizationSet,
-		mcp_ext_authz: Option<crate::http::ext_authz::ExtAuthz>,
+		mcp_ext_authz: Option<crate::mcp::ext_authz::McpExtAuthz>,
 		client: PolicyClient,
 	) -> Result<Self, mcp::Error> {
 		Ok(Self {
@@ -131,7 +131,7 @@ impl Relay {
 		&self,
 		cel: &CelExecWrapper,
 		mcp: Option<&rbac::ResourceType>,
-	) -> Result<crate::http::ext_authz::McpExtAuthzOkResponse, UpstreamError> {
+	) -> Result<crate::mcp::ext_authz::McpExtAuthzOkResponse, UpstreamError> {
 		let Some(ea) = &self.mcp_ext_authz else {
 			return Ok(Default::default());
 		};
@@ -145,7 +145,7 @@ impl Relay {
 				},
 			)));
 		};
-		ea.check_mcp(self.client.clone(), snapshot, mcp)
+		ea.check(self.client.clone(), snapshot, mcp)
 			.await
 			.map_err(|e| {
 				UpstreamError::ExtAuthzDenied(Box::new(upstream::UpstreamExtAuthzDenied {

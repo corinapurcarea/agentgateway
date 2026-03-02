@@ -117,7 +117,7 @@ pub struct BackendPolicies {
 
 	pub mcp_authorization: Option<McpAuthorizationSet>,
 	pub mcp_authentication: Option<McpAuthentication>,
-	pub mcp_ext_authz: Option<ext_authz::ExtAuthz>,
+	pub mcp_ext_authz: Option<mcp::ext_authz::McpExtAuthz>,
 
 	pub http: Option<types::backend::HTTP>,
 	pub tcp: Option<types::backend::TCP>,

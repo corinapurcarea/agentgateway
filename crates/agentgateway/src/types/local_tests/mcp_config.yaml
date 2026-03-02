@@ -9,6 +9,14 @@ binds:
           - "*"
           allowHeaders:
           - "*"
+        mcpExtAuthz:
+          host: "127.0.0.1:9001"
+          protocol:
+            grpc:
+              context:
+                source: agentgateway
+              metadata:
+                tool_name: 'mcp.tool.name'
         mcpAuthorization:
           rules:
           # Allow anyone to call 'echo'

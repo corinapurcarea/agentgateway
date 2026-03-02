@@ -1885,7 +1885,7 @@ pub enum TrafficPolicy {
 pub enum BackendPolicy {
 	McpAuthorization(McpAuthorization),
 	McpAuthentication(McpAuthentication),
-	McpExtAuthz(ext_authz::ExtAuthz),
+	McpExtAuthz(mcp::ext_authz::McpExtAuthz),
 	A2a(A2aPolicy),
 	#[serde(rename = "http")]
 	HTTP(backend::HTTP),

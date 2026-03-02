@@ -27,6 +27,15 @@ binds:
                           - "jwt.sub == \"test-user\" && mcp.tool.name == \"add\""
                           - "mcp.tool.name == \"printEnv\" && jwt.nested.key == \"value\""
                         deny: []
+                  - mcpExtAuthz:
+                      failureMode: deny
+                      inlineBackend: "127.0.0.1:9001"
+                      protocol:
+                        grpc:
+                          context:
+                            source: agentgateway
+                          metadata:
+                            tool_name: mcp.tool.name
                 weight: 1
             inlinePolicies:
               - cors:

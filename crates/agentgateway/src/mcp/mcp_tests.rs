@@ -407,7 +407,7 @@ fn ext_authz_denied_error_produces_json_rpc_response() {
 
 #[test]
 fn mcp_ext_authz_denied_error_default() {
-	use crate::http::ext_authz::McpExtAuthzDenied;
+	use crate::mcp::ext_authz::McpExtAuthzDenied;
 
 	let denied = McpExtAuthzDenied::default();
 	assert!(denied.response_headers.is_empty());
@@ -654,7 +654,8 @@ fn resource_type_serialization_all_variants() {
 
 #[test]
 fn mcp_ok_response_carries_dynamic_metadata() {
-	use crate::http::ext_authz::{ExtAuthzDynamicMetadata, McpExtAuthzOkResponse};
+	use crate::http::ext_authz::ExtAuthzDynamicMetadata;
+	use crate::mcp::ext_authz::McpExtAuthzOkResponse;
 
 	let dm: ExtAuthzDynamicMetadata = serde_json::from_value(serde_json::json!({
 		"request_id": "abc-123",
@@ -1542,4 +1543,245 @@ mod legacymockserver {
 			Ok(self.get_info())
 		}
 	}
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_tool() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::ext_authz::build_metadata_from_snapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Tool(ResourceId::new(
+		"my_server".to_string(),
+		"my_tool".to_string(),
+	));
+
+	let metadata = build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.expect("should produce metadata for MCP resource");
+	assert!(
+		meta
+			.filter_metadata
+			.contains_key("agentgateway.filters.mcp"),
+		"should contain agentgateway.filters.mcp key"
+	);
+	assert!(
+		!meta
+			.filter_metadata
+			.contains_key("envoy.filters.http.jwt_authn"),
+		"should not contain JWT key when no JWT claims"
+	);
+
+	let mcp_struct = meta
+		.filter_metadata
+		.get("agentgateway.filters.mcp")
+		.unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["tool"]["target"], "my_server");
+	assert_eq!(mcp_json["tool"]["name"], "my_tool");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_prompt() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::ext_authz::build_metadata_from_snapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Prompt(ResourceId::new(
+		"backend".to_string(),
+		"summarize".to_string(),
+	));
+
+	let metadata = build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	let mcp_struct = meta
+		.filter_metadata
+		.get("agentgateway.filters.mcp")
+		.unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["prompt"]["target"], "backend");
+	assert_eq!(mcp_json["prompt"]["name"], "summarize");
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_mcp_fallback_resource() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::ext_authz::build_metadata_from_snapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Resource(ResourceId::new(
+		"default".to_string(),
+		"memo://insights".to_string(),
+	));
+
+	let metadata = build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	let mcp_struct = meta
+		.filter_metadata
+		.get("agentgateway.filters.mcp")
+		.unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["resource"]["target"], "default");
+	assert_eq!(mcp_json["resource"]["name"], "memo://insights");
+}
+
+#[test]
+fn test_build_metadata_no_mcp_no_jwt_returns_none() {
+	use crate::cel::RequestSnapshot;
+	use crate::mcp::ext_authz::build_metadata_from_snapshot;
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let metadata = build_metadata_from_snapshot(&None, &snapshot, None);
+
+	assert!(
+		metadata.is_none(),
+		"should return None when no MCP resource and no JWT"
+	);
+}
+
+#[test]
+fn test_build_metadata_from_snapshot_jwt_and_mcp_both_present() {
+	use crate::cel::RequestSnapshot;
+	use crate::http::jwt::Claims;
+	use crate::mcp::ext_authz::build_metadata_from_snapshot;
+	use crate::mcp::{ResourceId, ResourceType};
+	use secrecy::SecretString;
+
+	let mut claims_map = serde_json::Map::new();
+	claims_map.insert("sub".to_string(), serde_json::json!("user@example.com"));
+	claims_map.insert(
+		"iss".to_string(),
+		serde_json::json!("https://auth.example.com"),
+	);
+
+	let snapshot = RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: Some(Claims {
+			inner: claims_map,
+			jwt: SecretString::from("fake.jwt.token"),
+		}),
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	};
+
+	let resource = ResourceType::Tool(ResourceId::new("server".to_string(), "my_tool".to_string()));
+
+	let metadata = build_metadata_from_snapshot(&None, &snapshot, Some(&resource));
+
+	let meta = metadata.unwrap();
+	assert!(
+		meta
+			.filter_metadata
+			.contains_key("envoy.filters.http.jwt_authn"),
+		"should contain JWT metadata"
+	);
+	assert!(
+		meta
+			.filter_metadata
+			.contains_key("agentgateway.filters.mcp"),
+		"should contain MCP metadata"
+	);
+
+	let jwt_struct = meta
+		.filter_metadata
+		.get("envoy.filters.http.jwt_authn")
+		.unwrap();
+	let jwt_json = serde_json::to_value(jwt_struct).unwrap();
+	assert_eq!(jwt_json["jwt_payload"]["sub"], "user@example.com");
+
+	let mcp_struct = meta
+		.filter_metadata
+		.get("agentgateway.filters.mcp")
+		.unwrap();
+	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
+	assert_eq!(mcp_json["tool"]["name"], "my_tool");
 }
