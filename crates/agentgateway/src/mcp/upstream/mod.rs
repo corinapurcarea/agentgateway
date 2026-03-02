@@ -85,11 +85,7 @@ pub enum UpstreamError {
 		resource_name: String,
 	},
 	#[error("external authorization denied")]
-	ExtAuthzDenied {
-		response_headers: ::http::HeaderMap,
-		status_code: ::http::StatusCode,
-		body: String,
-	},
+	ExtAuthzDenied(Box<UpstreamExtAuthzDenied>),
 	#[error("invalid request: {0}")]
 	InvalidRequest(String),
 	#[error("unsupported method: {0}")]
@@ -110,6 +106,13 @@ pub enum UpstreamError {
 	Send,
 	#[error("upstream closed on receive")]
 	Recv,
+}
+
+#[derive(Debug)]
+pub struct UpstreamExtAuthzDenied {
+	pub response_headers: ::http::HeaderMap,
+	pub status_code: ::http::StatusCode,
+	pub body: String,
 }
 
 // UpstreamTarget defines a source for MCP information.

@@ -1072,6 +1072,18 @@
             }
           ]
         },
+        "mcpExtAuthz": {
+          "description": "Authenticate MCP requests by calling an external authorization server, with MCP context.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtAuthz"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "a2a": {
           "description": "Mark this traffic as A2A to enable A2A processing and telemetry.",
           "anyOf": [
@@ -1760,290 +1772,11 @@
       },
       "additionalProperties": false
     },
-    "A2aPolicy": {
-      "type": "object",
-      "additionalProperties": false
-    },
-    "Policy": {
+    "ExtAuthz": {
       "type": "object",
       "properties": {
-        "promptGuard": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PromptGuard"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "defaults": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "overrides": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "transformations": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Expression"
-          }
-        },
-        "prompts": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PromptEnrichment"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "modelAliases": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "promptCaching": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PromptCachingConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "routes": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/RouteType"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "PromptGuard": {
-      "type": "object",
-      "properties": {
-        "request": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/RequestGuard"
-          }
-        },
-        "response": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ResponseGuard"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "RequestGuard": {
-      "type": "object",
-      "properties": {
-        "rejection": {
-          "$ref": "#/$defs/RequestRejection",
-          "default": {
-            "body": "The request was rejected due to inappropriate content",
-            "status": 403
-          }
-        }
-      },
-      "unevaluatedProperties": false,
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "regex": {
-              "$ref": "#/$defs/RegexRules"
-            }
-          },
-          "required": [
-            "regex"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "webhook": {
-              "$ref": "#/$defs/Webhook"
-            }
-          },
-          "required": [
-            "webhook"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "openAIModeration": {
-              "$ref": "#/$defs/Moderation"
-            }
-          },
-          "required": [
-            "openAIModeration"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "bedrockGuardrails": {
-              "$ref": "#/$defs/BedrockGuardrails"
-            }
-          },
-          "required": [
-            "bedrockGuardrails"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "googleModelArmor": {
-              "$ref": "#/$defs/GoogleModelArmor"
-            }
-          },
-          "required": [
-            "googleModelArmor"
-          ]
-        }
-      ]
-    },
-    "RequestRejection": {
-      "type": "object",
-      "properties": {
-        "body": {
-          "$ref": "#/$defs/Bytes",
-          "default": "The request was rejected due to inappropriate content"
-        },
-        "status": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 1,
-          "maximum": 65535,
-          "default": 403
-        },
-        "headers": {
-          "description": "Optional headers to add, set, or remove from the rejection response",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HeaderModifier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "RegexRules": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "$ref": "#/$defs/Action",
-          "default": "mask"
-        },
-        "rules": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/RegexRule"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "rules"
-      ]
-    },
-    "Action": {
-      "type": "string",
-      "enum": [
-        "mask",
-        "reject"
-      ]
-    },
-    "RegexRule": {
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "builtin": {
-              "$ref": "#/$defs/Builtin"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "builtin"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "pattern": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "pattern"
-          ]
-        }
-      ]
-    },
-    "Builtin": {
-      "type": "string",
-      "enum": [
-        "ssn",
-        "creditCard",
-        "phoneNumber",
-        "email",
-        "caSin"
-      ]
-    },
-    "Webhook": {
-      "type": "object",
-      "properties": {
-        "target": {
-          "$ref": "#/$defs/SimpleLocalBackend"
-        },
-        "forwardHeaderMatches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HeaderMatch"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "target"
-      ]
-    },
-    "Moderation": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "description": "Model to use. Defaults to `omni-moderation-latest`",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "policies": {
+          "description": "Policies to connect to the backend",
           "anyOf": [
             {
               "$ref": "#/$defs/SimpleLocalBackendPolicies"
@@ -2052,9 +1785,100 @@
               "type": "null"
             }
           ]
+        },
+        "protocol": {
+          "description": "The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.",
+          "$ref": "#/$defs/Protocol2",
+          "default": {
+            "grpc": {}
+          }
+        },
+        "failureMode": {
+          "description": "Behavior when the authorization service is unavailable or returns an error",
+          "$ref": "#/$defs/FailureMode",
+          "default": "deny"
+        },
+        "includeRequestHeaders": {
+          "description": "Specific headers to include in the authorization request.\nIf unset, the gRPC protocol sends all request headers. The HTTP protocol sends only 'Authorization'.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderOrPseudo"
+          }
+        },
+        "includeRequestBody": {
+          "description": "Options for including the request body in the authorization request",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BodyOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
-      "additionalProperties": false
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "invalid"
+          ]
+        },
+        {
+          "description": "Service reference. Service must be defined in the top level services list.",
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/NamespacedHostname"
+                },
+                "port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "port"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ]
+        },
+        {
+          "description": "Hostname or IP address",
+          "type": "object",
+          "properties": {
+            "host": {
+              "description": "Hostname or IP address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ]
+        }
+      ]
     },
     "SimpleLocalBackendPolicies": {
       "type": "object",
@@ -2568,6 +2392,453 @@
         "nanos"
       ]
     },
+    "Protocol2": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "grpc": {
+              "type": "object",
+              "properties": {
+                "context": {
+                  "description": "Additional context to send to the authorization service.\nThis maps to the `context_extensions` field of the request, and only allows static values.",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "metadata": {
+                  "description": "Additional metadata to send to the authorization service.\nThis maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.\nIf unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Expression"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "grpc"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "http": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "redirect": {
+                  "description": "When using the HTTP protocol, and the server returns unauthorized, redirect to the URL resolved by\nthe provided expression rather than directly returning the error.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "includeResponseHeaders": {
+                  "description": "Specific headers from the authorization response will be copied into the request to the backend.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "addRequestHeaders": {
+                  "description": "Specific headers to add in the authorization request (empty = all headers), based on the expression",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Expression"
+                  }
+                },
+                "metadata": {
+                  "description": "Metadata to include under the `extauthz` variable, based on the authorization response.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Expression"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "http"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Expression": {
+      "type": "string"
+    },
+    "FailureMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "denyWithStatus": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "denyWithStatus"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HeaderOrPseudo": {
+      "type": "string"
+    },
+    "BodyOptions": {
+      "type": "object",
+      "properties": {
+        "maxRequestBytes": {
+          "description": "Maximum size of request body to buffer (default: 8192)",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "allowPartialMessage": {
+          "description": "If true, send partial body when max_request_bytes is reached",
+          "type": "boolean",
+          "default": false
+        },
+        "packAsBytes": {
+          "description": "If true, pack body as raw bytes in gRPC",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "A2aPolicy": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "Policy": {
+      "type": "object",
+      "properties": {
+        "promptGuard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptGuard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaults": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "overrides": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "transformations": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "prompts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptEnrichment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelAliases": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "promptCaching": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptCachingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RouteType"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PromptGuard": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RequestGuard"
+          }
+        },
+        "response": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResponseGuard"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestGuard": {
+      "type": "object",
+      "properties": {
+        "rejection": {
+          "$ref": "#/$defs/RequestRejection",
+          "default": {
+            "body": "The request was rejected due to inappropriate content",
+            "status": 403
+          }
+        }
+      },
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "regex": {
+              "$ref": "#/$defs/RegexRules"
+            }
+          },
+          "required": [
+            "regex"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "webhook": {
+              "$ref": "#/$defs/Webhook"
+            }
+          },
+          "required": [
+            "webhook"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "openAIModeration": {
+              "$ref": "#/$defs/Moderation"
+            }
+          },
+          "required": [
+            "openAIModeration"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bedrockGuardrails": {
+              "$ref": "#/$defs/BedrockGuardrails"
+            }
+          },
+          "required": [
+            "bedrockGuardrails"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "googleModelArmor": {
+              "$ref": "#/$defs/GoogleModelArmor"
+            }
+          },
+          "required": [
+            "googleModelArmor"
+          ]
+        }
+      ]
+    },
+    "RequestRejection": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Bytes",
+          "default": "The request was rejected due to inappropriate content"
+        },
+        "status": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 403
+        },
+        "headers": {
+          "description": "Optional headers to add, set, or remove from the rejection response",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeaderModifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RegexRules": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action",
+          "default": "mask"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RegexRule"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rules"
+      ]
+    },
+    "Action": {
+      "type": "string",
+      "enum": [
+        "mask",
+        "reject"
+      ]
+    },
+    "RegexRule": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "builtin": {
+              "$ref": "#/$defs/Builtin"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "builtin"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "pattern"
+          ]
+        }
+      ]
+    },
+    "Builtin": {
+      "type": "string",
+      "enum": [
+        "ssn",
+        "creditCard",
+        "phoneNumber",
+        "email",
+        "caSin"
+      ]
+    },
+    "Webhook": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SimpleLocalBackend"
+        },
+        "forwardHeaderMatches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderMatch"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ]
+    },
+    "Moderation": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Model to use. Defaults to `omni-moderation-latest`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policies": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "BedrockGuardrails": {
       "description": "Configuration for AWS Bedrock Guardrails integration.",
       "type": "object",
@@ -2698,9 +2969,6 @@
           ]
         }
       ]
-    },
-    "Expression": {
-      "type": "string"
     },
     "PromptEnrichment": {
       "type": "object",
@@ -2866,7 +3134,7 @@
         },
         "failureMode": {
           "description": "Behavior when the remote rate limit service is unavailable or returns an error.\nDefaults to failClosed, denying requests with a 500 status on service failure.",
-          "$ref": "#/$defs/FailureMode",
+          "$ref": "#/$defs/FailureMode2",
           "default": "failClosed"
         }
       },
@@ -2977,7 +3245,7 @@
         "value"
       ]
     },
-    "FailureMode": {
+    "FailureMode2": {
       "description": "Defines how the proxy behaves when the remote rate limit service is\nunavailable or returns an error.\n\nDefaults to `FailClosed`. When failing closed, a 500 Internal Server Error\nis returned when the service is unavailable. When failing open, requests are\nallowed through despite the service failure.\n\n# Configuration\n\nBoth camelCase (`failOpen`, `failClosed`) and PascalCase (`FailOpen`,\n`FailClosed`) are accepted in configuration files",
       "oneOf": [
         {
@@ -3196,262 +3464,6 @@
           "const": "optional"
         }
       ]
-    },
-    "ExtAuthz": {
-      "type": "object",
-      "properties": {
-        "policies": {
-          "description": "Policies to connect to the backend",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SimpleLocalBackendPolicies"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "protocol": {
-          "description": "The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.",
-          "$ref": "#/$defs/Protocol2",
-          "default": {
-            "grpc": {}
-          }
-        },
-        "failureMode": {
-          "description": "Behavior when the authorization service is unavailable or returns an error",
-          "$ref": "#/$defs/FailureMode2",
-          "default": "deny"
-        },
-        "includeRequestHeaders": {
-          "description": "Specific headers to include in the authorization request.\nIf unset, the gRPC protocol sends all request headers. The HTTP protocol sends only 'Authorization'.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/HeaderOrPseudo"
-          }
-        },
-        "includeRequestBody": {
-          "description": "Options for including the request body in the authorization request",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BodyOptions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "unevaluatedProperties": false,
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "invalid"
-          ]
-        },
-        {
-          "description": "Service reference. Service must be defined in the top level services list.",
-          "type": "object",
-          "properties": {
-            "service": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "$ref": "#/$defs/NamespacedHostname"
-                },
-                "port": {
-                  "type": "integer",
-                  "format": "uint16",
-                  "minimum": 0,
-                  "maximum": 65535
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "name",
-                "port"
-              ]
-            }
-          },
-          "required": [
-            "service"
-          ]
-        },
-        {
-          "description": "Hostname or IP address",
-          "type": "object",
-          "properties": {
-            "host": {
-              "description": "Hostname or IP address",
-              "type": "string"
-            }
-          },
-          "required": [
-            "host"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "backend": {
-              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
-              "type": "string"
-            }
-          },
-          "required": [
-            "backend"
-          ]
-        }
-      ]
-    },
-    "Protocol2": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "grpc": {
-              "type": "object",
-              "properties": {
-                "context": {
-                  "description": "Additional context to send to the authorization service.\nThis maps to the `context_extensions` field of the request, and only allows static values.",
-                  "type": [
-                    "object",
-                    "null"
-                  ],
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                },
-                "metadata": {
-                  "description": "Additional metadata to send to the authorization service.\nThis maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.\nIf unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.",
-                  "type": [
-                    "object",
-                    "null"
-                  ],
-                  "additionalProperties": {
-                    "$ref": "#/$defs/Expression"
-                  }
-                }
-              },
-              "additionalProperties": false
-            }
-          },
-          "required": [
-            "grpc"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "http": {
-              "type": "object",
-              "properties": {
-                "path": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/Expression"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "redirect": {
-                  "description": "When using the HTTP protocol, and the server returns unauthorized, redirect to the URL resolved by\nthe provided expression rather than directly returning the error.",
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/Expression"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "includeResponseHeaders": {
-                  "description": "Specific headers from the authorization response will be copied into the request to the backend.",
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "addRequestHeaders": {
-                  "description": "Specific headers to add in the authorization request (empty = all headers), based on the expression",
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/$defs/Expression"
-                  }
-                },
-                "metadata": {
-                  "description": "Metadata to include under the `extauthz` variable, based on the authorization response.",
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/$defs/Expression"
-                  }
-                }
-              },
-              "additionalProperties": false
-            }
-          },
-          "required": [
-            "http"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "FailureMode2": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "allow",
-            "deny"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "denyWithStatus": {
-              "type": "integer",
-              "format": "uint16",
-              "minimum": 0,
-              "maximum": 65535
-            }
-          },
-          "required": [
-            "denyWithStatus"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "HeaderOrPseudo": {
-      "type": "string"
-    },
-    "BodyOptions": {
-      "type": "object",
-      "properties": {
-        "maxRequestBytes": {
-          "description": "Maximum size of request body to buffer (default: 8192)",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "default": 0
-        },
-        "allowPartialMessage": {
-          "description": "If true, send partial body when max_request_bytes is reached",
-          "type": "boolean",
-          "default": false
-        },
-        "packAsBytes": {
-          "description": "If true, pack body as raw bytes in gRPC",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
     },
     "ExtProc": {
       "type": "object",

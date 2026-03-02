@@ -55,12 +55,7 @@ pub enum Error {
 	#[error("Unknown {1}: {2}")]
 	Authorization(RequestId, String, String),
 	#[error("external authorization denied")]
-	ExtAuthzDenied {
-		req_id: RequestId,
-		response_headers: ::http::HeaderMap,
-		status_code: ::http::StatusCode,
-		body: String,
-	},
+	ExtAuthzDenied(Box<ExtAuthzDeniedInfo>),
 	#[error("failed to process session_id query parameter")]
 	InvalidSessionIdQuery,
 	#[error("failed to establish get stream: {0}")]
@@ -71,6 +66,14 @@ pub enum Error {
 	CreateSseUrl(String),
 	#[error("failed to parse openapi: {0}")]
 	OpenAPI(upstream::OpenAPIParseError),
+}
+
+#[derive(Debug)]
+pub struct ExtAuthzDeniedInfo {
+	pub req_id: RequestId,
+	pub response_headers: ::http::HeaderMap,
+	pub status_code: ::http::StatusCode,
+	pub body: String,
 }
 
 impl From<Error> for ProxyError {

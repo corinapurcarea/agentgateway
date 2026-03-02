@@ -722,7 +722,10 @@ impl ExtAuthz {
 				..Default::default()
 			});
 		};
-		trace!(protocol = "grpc", "mcp ext_authz connecting to {:?}", self.target);
+		trace!(
+			protocol = "grpc",
+			"mcp ext_authz connecting to {:?}", self.target
+		);
 
 		let chan = GrpcReferenceChannel {
 			target: self.target.clone(),
@@ -873,7 +876,11 @@ impl ExtAuthz {
 			}
 			ok_resp.request_headers_to_remove = headers_to_remove;
 			if !response_headers_to_add.is_empty() {
-				process_headers(&mut ok_resp.response_headers_to_add, response_headers_to_add, None);
+				process_headers(
+					&mut ok_resp.response_headers_to_add,
+					response_headers_to_add,
+					None,
+				);
 			}
 		}
 		Ok(ok_resp)
@@ -944,20 +951,16 @@ impl ExtAuthz {
 			},
 			None => {
 				let mut filter_metadata = HashMap::new();
-				if let Some(claims) = &snapshot.jwt {
-					if let Some(pb) =
-						json_to_struct(serde_json::json!({"jwt_payload": claims.inner.clone()})).ok()
-					{
-						filter_metadata
-							.insert("envoy.filters.http.jwt_authn".to_string(), pb);
-					}
+				if let Some(claims) = &snapshot.jwt
+					&& let Ok(pb) = json_to_struct(serde_json::json!({"jwt_payload": claims.inner.clone()}))
+				{
+					filter_metadata.insert("envoy.filters.http.jwt_authn".to_string(), pb);
 				}
-				if let Some(mcp) = mcp {
-					if let Ok(mcp_json) = serde_json::to_value(mcp) {
-						if let Some(pb) = json_to_struct(mcp_json).ok() {
-							filter_metadata.insert("agentgateway.filters.mcp".to_string(), pb);
-						}
-					}
+				if let Some(mcp) = mcp
+					&& let Ok(mcp_json) = serde_json::to_value(mcp)
+					&& let Ok(pb) = json_to_struct(mcp_json)
+				{
+					filter_metadata.insert("agentgateway.filters.mcp".to_string(), pb);
 				}
 				if filter_metadata.is_empty() {
 					None

@@ -137,18 +137,22 @@ impl Relay {
 		};
 		let Some(snapshot) = cel.snapshot() else {
 			tracing::warn!("mcp ext_authz: request snapshot unavailable, denying request");
-			return Err(UpstreamError::ExtAuthzDenied {
-				response_headers: Default::default(),
-				status_code: ::http::StatusCode::FORBIDDEN,
-				body: "external authorization denied".to_string(),
-			});
+			return Err(UpstreamError::ExtAuthzDenied(Box::new(
+				upstream::UpstreamExtAuthzDenied {
+					response_headers: Default::default(),
+					status_code: ::http::StatusCode::FORBIDDEN,
+					body: "external authorization denied".to_string(),
+				},
+			)));
 		};
 		ea.check_mcp(self.client.clone(), snapshot, mcp)
 			.await
-			.map_err(|e| UpstreamError::ExtAuthzDenied {
-				response_headers: e.response_headers,
-				status_code: e.status_code,
-				body: e.body,
+			.map_err(|e| {
+				UpstreamError::ExtAuthzDenied(Box::new(upstream::UpstreamExtAuthzDenied {
+					response_headers: e.response_headers,
+					status_code: e.status_code,
+					body: e.body,
+				}))
 			})
 	}
 

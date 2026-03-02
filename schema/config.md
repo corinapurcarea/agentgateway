@@ -158,6 +158,97 @@
 |`binds[].listeners[].routes[].policies.mcpAuthentication.mode`||
 |`binds[].listeners[].routes[].policies.mcpAuthentication.jwtValidationOptions`|JWT validation options controlling which claims must be present in a token.<br><br>The `required_claims` set specifies which RFC 7519 registered claims must<br>exist in the token payload before validation proceeds. Only the following<br>values are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered<br>claims such as `iat` and `jti` are **not** enforced by the underlying<br>`jsonwebtoken` library and will be silently ignored.<br><br>This only enforces **presence**. Standard claims like `exp` and `nbf`<br>have their values validated independently (e.g., expiry is always checked<br>when the `exp` claim is present, regardless of this setting).<br><br>Defaults to `["exp"]`.|
 |`binds[].listeners[].routes[].policies.mcpAuthentication.jwtValidationOptions.requiredClaims`|Claims that must be present in the token before validation.<br>Only "exp", "nbf", "aud", "iss", "sub" are enforced; others<br>(including "iat" and "jti") are ignored.<br>Defaults to ["exp"]. Use an empty list to require no claims.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz`|Authenticate MCP requests by calling an external authorization server, with MCP context.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)service`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)service.name`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)service.name.namespace`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)service.name.hostname`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)service.port`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)host`|Hostname or IP address|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)(1)backend`|Explicit backend reference. Backend must be defined in the top level backends list|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies`|Policies to connect to the backend|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestHeaderModifier.add`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestHeaderModifier.set`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestHeaderModifier.remove`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.responseHeaderModifier.add`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.responseHeaderModifier.set`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.responseHeaderModifier.remove`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.scheme`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.authority`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)full`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)host`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)port`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.path`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)full`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)prefix`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.requestRedirect.status`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS`|Send TLS to the backend.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.cert`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.key`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.root`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.hostname`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.insecure`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.insecureHost`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.alpn`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendTLS.subjectAltNames`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth`|Authenticate to the backend.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)passthrough`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key.(any)file`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)audience`|Audience for the token. If not set, the destination host will be used.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)region`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.http`|Specify HTTP settings for the backend|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.http.version`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.http.requestTimeout`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp`|Specify TCP settings for the backend|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.keepalives`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.keepalives.enabled`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.keepalives.time`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.keepalives.interval`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.keepalives.retries`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.connectTimeout`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.connectTimeout.secs`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)policies.tcp.connectTimeout.nanos`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol`|The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)grpc`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)grpc.context`|Additional context to send to the authorization service.<br>This maps to the `context_extensions` field of the request, and only allows static values.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)grpc.metadata`|Additional metadata to send to the authorization service.<br>This maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.<br>If unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http.path`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http.redirect`|When using the HTTP protocol, and the server returns unauthorized, redirect to the URL resolved by<br>the provided expression rather than directly returning the error.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http.includeResponseHeaders`|Specific headers from the authorization response will be copied into the request to the backend.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http.addRequestHeaders`|Specific headers to add in the authorization request (empty = all headers), based on the expression|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)protocol.(1)http.metadata`|Metadata to include under the `extauthz` variable, based on the authorization response.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)failureMode`|Behavior when the authorization service is unavailable or returns an error|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)failureMode.(1)denyWithStatus`||
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)includeRequestHeaders`|Specific headers to include in the authorization request.<br>If unset, the gRPC protocol sends all request headers. The HTTP protocol sends only 'Authorization'.|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`binds[].listeners[].routes[].policies.mcpExtAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
 |`binds[].listeners[].routes[].policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].policies.ai`|Mark this as LLM traffic to enable LLM processing.|
 |`binds[].listeners[].routes[].policies.ai.promptGuard`||
@@ -2979,6 +3070,97 @@
 |`policies[].policy.mcpAuthentication.mode`||
 |`policies[].policy.mcpAuthentication.jwtValidationOptions`|JWT validation options controlling which claims must be present in a token.<br><br>The `required_claims` set specifies which RFC 7519 registered claims must<br>exist in the token payload before validation proceeds. Only the following<br>values are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered<br>claims such as `iat` and `jti` are **not** enforced by the underlying<br>`jsonwebtoken` library and will be silently ignored.<br><br>This only enforces **presence**. Standard claims like `exp` and `nbf`<br>have their values validated independently (e.g., expiry is always checked<br>when the `exp` claim is present, regardless of this setting).<br><br>Defaults to `["exp"]`.|
 |`policies[].policy.mcpAuthentication.jwtValidationOptions.requiredClaims`|Claims that must be present in the token before validation.<br>Only "exp", "nbf", "aud", "iss", "sub" are enforced; others<br>(including "iat" and "jti") are ignored.<br>Defaults to ["exp"]. Use an empty list to require no claims.|
+|`policies[].policy.mcpExtAuthz`|Authenticate MCP requests by calling an external authorization server, with MCP context.|
+|`policies[].policy.mcpExtAuthz.(any)(1)service`||
+|`policies[].policy.mcpExtAuthz.(any)(1)service.name`||
+|`policies[].policy.mcpExtAuthz.(any)(1)service.name.namespace`||
+|`policies[].policy.mcpExtAuthz.(any)(1)service.name.hostname`||
+|`policies[].policy.mcpExtAuthz.(any)(1)service.port`||
+|`policies[].policy.mcpExtAuthz.(any)(1)host`|Hostname or IP address|
+|`policies[].policy.mcpExtAuthz.(any)(1)backend`|Explicit backend reference. Backend must be defined in the top level backends list|
+|`policies[].policy.mcpExtAuthz.(any)policies`|Policies to connect to the backend|
+|`policies[].policy.mcpExtAuthz.(any)policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`policies[].policy.mcpExtAuthz.(any)policies.requestHeaderModifier.add`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestHeaderModifier.set`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestHeaderModifier.remove`||
+|`policies[].policy.mcpExtAuthz.(any)policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`policies[].policy.mcpExtAuthz.(any)policies.responseHeaderModifier.add`||
+|`policies[].policy.mcpExtAuthz.(any)policies.responseHeaderModifier.set`||
+|`policies[].policy.mcpExtAuthz.(any)policies.responseHeaderModifier.remove`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.scheme`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.authority`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)full`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)host`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)port`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.path`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)full`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)prefix`||
+|`policies[].policy.mcpExtAuthz.(any)policies.requestRedirect.status`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS`|Send TLS to the backend.|
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.cert`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.key`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.root`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.hostname`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.insecure`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.insecureHost`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.alpn`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendTLS.subjectAltNames`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth`|Authenticate to the backend.|
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)passthrough`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key.(any)file`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)audience`|Audience for the token. If not set, the destination host will be used.|
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)region`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`policies[].policy.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
+|`policies[].policy.mcpExtAuthz.(any)policies.http`|Specify HTTP settings for the backend|
+|`policies[].policy.mcpExtAuthz.(any)policies.http.version`||
+|`policies[].policy.mcpExtAuthz.(any)policies.http.requestTimeout`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp`|Specify TCP settings for the backend|
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.keepalives`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.keepalives.enabled`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.keepalives.time`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.keepalives.interval`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.keepalives.retries`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.connectTimeout`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.connectTimeout.secs`||
+|`policies[].policy.mcpExtAuthz.(any)policies.tcp.connectTimeout.nanos`||
+|`policies[].policy.mcpExtAuthz.(any)protocol`|The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)grpc`||
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)grpc.context`|Additional context to send to the authorization service.<br>This maps to the `context_extensions` field of the request, and only allows static values.|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)grpc.metadata`|Additional metadata to send to the authorization service.<br>This maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.<br>If unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http`||
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http.path`||
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http.redirect`|When using the HTTP protocol, and the server returns unauthorized, redirect to the URL resolved by<br>the provided expression rather than directly returning the error.|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http.includeResponseHeaders`|Specific headers from the authorization response will be copied into the request to the backend.|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http.addRequestHeaders`|Specific headers to add in the authorization request (empty = all headers), based on the expression|
+|`policies[].policy.mcpExtAuthz.(any)protocol.(1)http.metadata`|Metadata to include under the `extauthz` variable, based on the authorization response.|
+|`policies[].policy.mcpExtAuthz.(any)failureMode`|Behavior when the authorization service is unavailable or returns an error|
+|`policies[].policy.mcpExtAuthz.(any)failureMode.(1)denyWithStatus`||
+|`policies[].policy.mcpExtAuthz.(any)includeRequestHeaders`|Specific headers to include in the authorization request.<br>If unset, the gRPC protocol sends all request headers. The HTTP protocol sends only 'Authorization'.|
+|`policies[].policy.mcpExtAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`policies[].policy.mcpExtAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`policies[].policy.mcpExtAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`policies[].policy.mcpExtAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
 |`policies[].policy.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`policies[].policy.ai`|Mark this as LLM traffic to enable LLM processing.|
 |`policies[].policy.ai.promptGuard`||
@@ -5031,6 +5213,97 @@
 |`mcp.policies.mcpAuthentication.mode`||
 |`mcp.policies.mcpAuthentication.jwtValidationOptions`|JWT validation options controlling which claims must be present in a token.<br><br>The `required_claims` set specifies which RFC 7519 registered claims must<br>exist in the token payload before validation proceeds. Only the following<br>values are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered<br>claims such as `iat` and `jti` are **not** enforced by the underlying<br>`jsonwebtoken` library and will be silently ignored.<br><br>This only enforces **presence**. Standard claims like `exp` and `nbf`<br>have their values validated independently (e.g., expiry is always checked<br>when the `exp` claim is present, regardless of this setting).<br><br>Defaults to `["exp"]`.|
 |`mcp.policies.mcpAuthentication.jwtValidationOptions.requiredClaims`|Claims that must be present in the token before validation.<br>Only "exp", "nbf", "aud", "iss", "sub" are enforced; others<br>(including "iat" and "jti") are ignored.<br>Defaults to ["exp"]. Use an empty list to require no claims.|
+|`mcp.policies.mcpExtAuthz`|Authenticate MCP requests by calling an external authorization server, with MCP context.|
+|`mcp.policies.mcpExtAuthz.(any)(1)service`||
+|`mcp.policies.mcpExtAuthz.(any)(1)service.name`||
+|`mcp.policies.mcpExtAuthz.(any)(1)service.name.namespace`||
+|`mcp.policies.mcpExtAuthz.(any)(1)service.name.hostname`||
+|`mcp.policies.mcpExtAuthz.(any)(1)service.port`||
+|`mcp.policies.mcpExtAuthz.(any)(1)host`|Hostname or IP address|
+|`mcp.policies.mcpExtAuthz.(any)(1)backend`|Explicit backend reference. Backend must be defined in the top level backends list|
+|`mcp.policies.mcpExtAuthz.(any)policies`|Policies to connect to the backend|
+|`mcp.policies.mcpExtAuthz.(any)policies.requestHeaderModifier`|Headers to be modified in the request.|
+|`mcp.policies.mcpExtAuthz.(any)policies.requestHeaderModifier.add`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestHeaderModifier.set`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestHeaderModifier.remove`||
+|`mcp.policies.mcpExtAuthz.(any)policies.responseHeaderModifier`|Headers to be modified in the response.|
+|`mcp.policies.mcpExtAuthz.(any)policies.responseHeaderModifier.add`||
+|`mcp.policies.mcpExtAuthz.(any)policies.responseHeaderModifier.set`||
+|`mcp.policies.mcpExtAuthz.(any)policies.responseHeaderModifier.remove`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect`|Directly respond to the request with a redirect.|
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.scheme`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.authority`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)full`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)host`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.authority.(any)(1)port`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.path`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)full`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.path.(any)(1)prefix`||
+|`mcp.policies.mcpExtAuthz.(any)policies.requestRedirect.status`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS`|Send TLS to the backend.|
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.cert`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.key`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.root`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.hostname`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.insecure`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.insecureHost`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.alpn`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendTLS.subjectAltNames`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth`|Authenticate to the backend.|
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)passthrough`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)key.(any)file`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)audience`|Audience for the token. If not set, the destination host will be used.|
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)gcp.(any)type`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)accessKeyId`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)secretAccessKey`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)region`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)aws.(any)sessionToken`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.tenant_id`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_id`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)clientSecret.client_secret`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)clientId`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)objectId`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)managedIdentity.userAssignedIdentity.(any)(1)resourceId`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)explicitConfig.(1)workloadIdentity`||
+|`mcp.policies.mcpExtAuthz.(any)policies.backendAuth.(any)(1)azure.(1)developerImplicit`||
+|`mcp.policies.mcpExtAuthz.(any)policies.http`|Specify HTTP settings for the backend|
+|`mcp.policies.mcpExtAuthz.(any)policies.http.version`||
+|`mcp.policies.mcpExtAuthz.(any)policies.http.requestTimeout`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp`|Specify TCP settings for the backend|
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.keepalives`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.keepalives.enabled`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.keepalives.time`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.keepalives.interval`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.keepalives.retries`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.connectTimeout`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.connectTimeout.secs`||
+|`mcp.policies.mcpExtAuthz.(any)policies.tcp.connectTimeout.nanos`||
+|`mcp.policies.mcpExtAuthz.(any)protocol`|The ext_authz protocol to use. Unless you need to integrate with an HTTP-only server, gRPC is recommended.|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)grpc`||
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)grpc.context`|Additional context to send to the authorization service.<br>This maps to the `context_extensions` field of the request, and only allows static values.|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)grpc.metadata`|Additional metadata to send to the authorization service.<br>This maps to the `metadata_context.filter_metadata` field of the request, and allows dynamic CEL expressions.<br>If unset, by default the `envoy.filters.http.jwt_authn` key is set if the JWT policy is used as well, for compatibility.|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http`||
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http.path`||
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http.redirect`|When using the HTTP protocol, and the server returns unauthorized, redirect to the URL resolved by<br>the provided expression rather than directly returning the error.|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http.includeResponseHeaders`|Specific headers from the authorization response will be copied into the request to the backend.|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http.addRequestHeaders`|Specific headers to add in the authorization request (empty = all headers), based on the expression|
+|`mcp.policies.mcpExtAuthz.(any)protocol.(1)http.metadata`|Metadata to include under the `extauthz` variable, based on the authorization response.|
+|`mcp.policies.mcpExtAuthz.(any)failureMode`|Behavior when the authorization service is unavailable or returns an error|
+|`mcp.policies.mcpExtAuthz.(any)failureMode.(1)denyWithStatus`||
+|`mcp.policies.mcpExtAuthz.(any)includeRequestHeaders`|Specific headers to include in the authorization request.<br>If unset, the gRPC protocol sends all request headers. The HTTP protocol sends only 'Authorization'.|
+|`mcp.policies.mcpExtAuthz.(any)includeRequestBody`|Options for including the request body in the authorization request|
+|`mcp.policies.mcpExtAuthz.(any)includeRequestBody.maxRequestBytes`|Maximum size of request body to buffer (default: 8192)|
+|`mcp.policies.mcpExtAuthz.(any)includeRequestBody.allowPartialMessage`|If true, send partial body when max_request_bytes is reached|
+|`mcp.policies.mcpExtAuthz.(any)includeRequestBody.packAsBytes`|If true, pack body as raw bytes in gRPC|
 |`mcp.policies.a2a`|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`mcp.policies.ai`|Mark this as LLM traffic to enable LLM processing.|
 |`mcp.policies.ai.promptGuard`||

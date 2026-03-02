@@ -352,12 +352,14 @@ fn ext_authz_denied_error_maps_to_ext_auth_reason() {
 	use crate::proxy::{ProxyError, ProxyResponse, ProxyResponseReason};
 	use rmcp::model::RequestId;
 
-	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied {
-		req_id: RequestId::Number(1),
-		response_headers: http::HeaderMap::new(),
-		status_code: http::StatusCode::FORBIDDEN,
-		body: String::new(),
-	});
+	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied(Box::new(
+		crate::mcp::ExtAuthzDeniedInfo {
+			req_id: RequestId::Number(1),
+			response_headers: http::HeaderMap::new(),
+			status_code: http::StatusCode::FORBIDDEN,
+			body: String::new(),
+		},
+	)));
 	let resp = ProxyResponse::Error(err);
 	assert_eq!(
 		resp.as_reason(),
@@ -374,12 +376,14 @@ fn ext_authz_denied_error_produces_json_rpc_response() {
 	let mut headers = http::HeaderMap::new();
 	headers.insert("x-custom", "test-value".parse().unwrap());
 
-	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied {
-		req_id: RequestId::Number(42),
-		response_headers: headers,
-		status_code: http::StatusCode::UNAUTHORIZED,
-		body: "insufficient permissions".to_string(),
-	});
+	let err = ProxyError::MCP(crate::mcp::Error::ExtAuthzDenied(Box::new(
+		crate::mcp::ExtAuthzDeniedInfo {
+			req_id: RequestId::Number(42),
+			response_headers: headers,
+			status_code: http::StatusCode::UNAUTHORIZED,
+			body: "insufficient permissions".to_string(),
+		},
+	)));
 	let resp = err.into_response();
 	assert_eq!(
 		resp.status(),
@@ -391,7 +395,12 @@ fn ext_authz_denied_error_produces_json_rpc_response() {
 		"test-value"
 	);
 	assert_eq!(
-		resp.headers().get("content-type").unwrap().to_str().unwrap(),
+		resp
+			.headers()
+			.get("content-type")
+			.unwrap()
+			.to_str()
+			.unwrap(),
 		"application/json"
 	);
 }
@@ -428,16 +437,14 @@ fn mcp_authorization_validates_using_extauthz_metadata() {
 	use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet, ResourceId, ResourceType};
 
 	// Allow rule: extauthz.tier == "premium"
-	let allow_expr =
-		Arc::new(cel::Expression::new_permissive(r#"extauthz.tier == "premium""#));
+	let allow_expr = Arc::new(cel::Expression::new_permissive(
+		r#"extauthz.tier == "premium""#,
+	));
 	let policy_set = PolicySet::new(vec![allow_expr], vec![]);
 	let rule_set = RuleSet::new(policy_set);
 	let authz = McpAuthorizationSet::new(RuleSets::from(vec![rule_set]));
 
-	let resource = ResourceType::Tool(ResourceId::new(
-		"server".to_string(),
-		"my_tool".to_string(),
-	));
+	let resource = ResourceType::Tool(ResourceId::new("server".to_string(), "my_tool".to_string()));
 
 	// Without extauthz metadata -> should deny (allow rule can't match)
 	let cel_no_meta = CelExecWrapper::new(Arc::new(None));
@@ -513,10 +520,7 @@ fn extauthz_dynamic_metadata_merges_route_and_mcp_levels() {
 	);
 
 	// Verify CEL expressions can access both route-level and MCP-level keys
-	let resource = ResourceType::Tool(ResourceId::new(
-		"server".to_string(),
-		"my_tool".to_string(),
-	));
+	let resource = ResourceType::Tool(ResourceId::new("server".to_string(), "my_tool".to_string()));
 
 	// Allow rule that requires both route-level "tenant" and MCP-level "role"
 	let allow_expr = Arc::new(cel::Expression::new_permissive(
@@ -603,14 +607,12 @@ fn route_level_extauthz_preserved_when_no_mcp_extauthz() {
 	// Do NOT call set_extauthz -- simulates no MCP ext_authz configured
 	let cel = CelExecWrapper::new(Arc::new(Some(snapshot)));
 
-	let resource = ResourceType::Tool(ResourceId::new(
-		"server".to_string(),
-		"my_tool".to_string(),
-	));
+	let resource = ResourceType::Tool(ResourceId::new("server".to_string(), "my_tool".to_string()));
 
 	// Allow rule referencing route-level metadata
-	let allow_expr =
-		Arc::new(cel::Expression::new_permissive(r#"extauthz.tenant == "acme""#));
+	let allow_expr = Arc::new(cel::Expression::new_permissive(
+		r#"extauthz.tenant == "acme""#,
+	));
 	let policy_set = PolicySet::new(vec![allow_expr], vec![]);
 	let rule_set = RuleSet::new(policy_set);
 	let authz = McpAuthorizationSet::new(RuleSets::from(vec![rule_set]));
@@ -627,7 +629,10 @@ fn resource_type_serialization_all_variants() {
 
 	let tool = ResourceType::Tool(ResourceId::new("srv".to_string(), "my_tool".to_string()));
 	let tool_json = serde_json::to_value(&tool).unwrap();
-	assert_eq!(tool_json, serde_json::json!({"tool": {"target": "srv", "name": "my_tool"}}));
+	assert_eq!(
+		tool_json,
+		serde_json::json!({"tool": {"target": "srv", "name": "my_tool"}})
+	);
 
 	let prompt = ResourceType::Prompt(ResourceId::new("srv".to_string(), "summarize".to_string()));
 	let prompt_json = serde_json::to_value(&prompt).unwrap();

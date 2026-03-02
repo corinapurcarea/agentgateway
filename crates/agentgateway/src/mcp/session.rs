@@ -186,20 +186,16 @@ impl Session {
 			}) if req_id.is_some() => {
 				Err(mcp::Error::Authorization(req_id.unwrap(), resource_type, resource_name).into())
 			},
-			Err(UpstreamError::ExtAuthzDenied {
-				response_headers,
-				status_code,
-				body,
-			}) if req_id.is_some() => Err(mcp::Error::ExtAuthzDenied {
-				req_id: req_id.unwrap(),
-				response_headers,
-				status_code,
-				body,
-			}
-			.into()),
-			Err(UpstreamError::ExtAuthzDenied { .. }) => {
-				Err(ProxyError::ExternalAuthorizationFailed(None))
-			},
+			Err(UpstreamError::ExtAuthzDenied(denied)) if req_id.is_some() => Err(
+				mcp::Error::ExtAuthzDenied(Box::new(mcp::ExtAuthzDeniedInfo {
+					req_id: req_id.unwrap(),
+					response_headers: denied.response_headers,
+					status_code: denied.status_code,
+					body: denied.body,
+				}))
+				.into(),
+			),
+			Err(UpstreamError::ExtAuthzDenied(_)) => Err(ProxyError::ExternalAuthorizationFailed(None)),
 			// TODO: this is too broad. We have a big tangle of errors to untangle though
 			Err(e) => Err(mcp::Error::SendError(req_id, e.to_string()).into()),
 		}
@@ -454,12 +450,8 @@ impl Session {
 								ea_ok.request_headers_to_add,
 								&ea_ok.request_headers_to_remove,
 							);
-							let mut resp =
-								self.relay.send_single_without_multiplexing(r, ctx).await?;
-							apply_response_headers(
-								&mut resp,
-								ea_ok.response_headers_to_add,
-							);
+							let mut resp = self.relay.send_single_without_multiplexing(r, ctx).await?;
+							apply_response_headers(&mut resp, ea_ok.response_headers_to_add);
 							Ok(resp)
 						} else {
 							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
