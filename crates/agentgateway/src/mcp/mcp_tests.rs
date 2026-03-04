@@ -368,8 +368,8 @@ fn ext_authz_denied_error_maps_to_ext_auth_reason() {
 	);
 }
 
-#[test]
-fn ext_authz_denied_error_produces_json_rpc_response() {
+#[tokio::test]
+async fn ext_authz_denied_error_produces_json_rpc_response() {
 	use crate::proxy::ProxyError;
 	use rmcp::model::RequestId;
 
@@ -403,6 +403,13 @@ fn ext_authz_denied_error_produces_json_rpc_response() {
 			.unwrap(),
 		"application/json"
 	);
+
+	let body_bytes = crate::http::body_to_bytes(resp.into_body()).await.unwrap();
+	let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("body should be valid JSON");
+	assert_eq!(json["jsonrpc"], "2.0");
+	assert_eq!(json["id"], 42);
+	assert_eq!(json["error"]["code"], rmcp::model::ErrorCode::INTERNAL_ERROR.code());
+	assert_eq!(json["error"]["message"], "insufficient permissions");
 }
 
 #[test]
@@ -1784,4 +1791,334 @@ fn test_build_metadata_from_snapshot_jwt_and_mcp_both_present() {
 		.unwrap();
 	let mcp_json = serde_json::to_value(mcp_struct).unwrap();
 	assert_eq!(mcp_json["tool"]["name"], "my_tool");
+}
+
+#[test]
+fn test_extract_body_no_opts_returns_empty() {
+	use crate::mcp::ext_authz::extract_body;
+
+	let (body, raw, size) = extract_body(&None, None);
+	assert!(body.is_empty());
+	assert!(raw.is_empty());
+	assert_eq!(size, 0);
+}
+
+#[test]
+fn test_extract_body_no_buffered_body_returns_empty() {
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 1024,
+		allow_partial_message: false,
+		pack_as_bytes: false,
+	});
+	let (body, raw, size) = extract_body(&opts, None);
+	assert!(body.is_empty());
+	assert!(raw.is_empty());
+	assert_eq!(size, 0);
+}
+
+#[test]
+fn test_extract_body_as_string() {
+	use crate::cel::BufferedBody;
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+	use bytes::Bytes;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 1024,
+		allow_partial_message: false,
+		pack_as_bytes: false,
+	});
+	let payload = r#"{"jsonrpc":"2.0","method":"tools/call"}"#;
+	let buffered = BufferedBody(Bytes::from(payload));
+	let (body, raw, size) = extract_body(&opts, Some(&buffered));
+	assert_eq!(body, payload);
+	assert!(
+		raw.is_empty(),
+		"raw_body should be empty when pack_as_bytes=false"
+	);
+	assert_eq!(size, payload.len() as i64);
+}
+
+#[test]
+fn test_extract_body_as_raw_bytes() {
+	use crate::cel::BufferedBody;
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+	use bytes::Bytes;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 1024,
+		allow_partial_message: false,
+		pack_as_bytes: true,
+	});
+	let payload = b"binary-payload";
+	let buffered = BufferedBody(Bytes::from(&payload[..]));
+	let (body, raw, size) = extract_body(&opts, Some(&buffered));
+	assert!(
+		body.is_empty(),
+		"body string should be empty when pack_as_bytes=true"
+	);
+	assert_eq!(raw, payload.to_vec());
+	assert_eq!(size, payload.len() as i64);
+}
+
+#[test]
+fn test_extract_body_truncated_with_allow_partial() {
+	use crate::cel::BufferedBody;
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+	use bytes::Bytes;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 5,
+		allow_partial_message: true,
+		pack_as_bytes: false,
+	});
+	let payload = "hello world";
+	let buffered = BufferedBody(Bytes::from(payload));
+	let (body, raw, size) = extract_body(&opts, Some(&buffered));
+	assert_eq!(
+		body, "hello",
+		"body should be truncated to max_request_bytes"
+	);
+	assert!(raw.is_empty());
+	assert_eq!(
+		size,
+		payload.len() as i64,
+		"size should report original body length"
+	);
+}
+
+#[test]
+fn test_extract_body_truncated_without_allow_partial_returns_empty() {
+	use crate::cel::BufferedBody;
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+	use bytes::Bytes;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 5,
+		allow_partial_message: false,
+		pack_as_bytes: false,
+	});
+	let payload = "hello world";
+	let buffered = BufferedBody(Bytes::from(payload));
+	let (body, raw, size) = extract_body(&opts, Some(&buffered));
+	assert!(
+		body.is_empty(),
+		"body should be empty when too large and allow_partial=false"
+	);
+	assert!(raw.is_empty());
+	assert_eq!(
+		size,
+		payload.len() as i64,
+		"size should still report original body length"
+	);
+}
+
+#[test]
+fn test_extract_body_exact_limit_not_truncated() {
+	use crate::cel::BufferedBody;
+	use crate::http::ext_authz::BodyOptions;
+	use crate::mcp::ext_authz::extract_body;
+	use bytes::Bytes;
+
+	let opts = Some(BodyOptions {
+		max_request_bytes: 5,
+		allow_partial_message: false,
+		pack_as_bytes: false,
+	});
+	let payload = "hello";
+	let buffered = BufferedBody(Bytes::from(payload));
+	let (body, _, size) = extract_body(&opts, Some(&buffered));
+	assert_eq!(body, "hello", "body at exact limit should not be truncated");
+	assert_eq!(size, 5);
+}
+
+// MARK: handle_auth_failure tests
+
+#[test]
+fn handle_auth_failure_allow_returns_ok() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::Allow,
+		..Default::default()
+	});
+	let result = ea.handle_auth_failure("test unavailable");
+	assert!(result.is_ok(), "FailureMode::Allow should return Ok");
+	let ok = result.unwrap();
+	assert!(ok.request_headers_to_add.is_empty());
+	assert!(ok.request_headers_to_remove.is_empty());
+	assert!(ok.response_headers_to_add.is_empty());
+	assert!(ok.dynamic_metadata.is_none());
+}
+
+#[test]
+fn handle_auth_failure_deny_returns_403() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::Deny,
+		..Default::default()
+	});
+	let result = ea.handle_auth_failure("test unavailable");
+	assert!(result.is_err(), "FailureMode::Deny should return Err");
+	let denied = result.unwrap_err();
+	assert_eq!(denied.status_code, ::http::StatusCode::FORBIDDEN);
+	assert_eq!(denied.body, "external authorization denied");
+	assert!(denied.response_headers.is_empty());
+}
+
+#[test]
+fn handle_auth_failure_deny_with_status_returns_custom_code() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::DenyWithStatus(503),
+		..Default::default()
+	});
+	let result = ea.handle_auth_failure("test unavailable");
+	assert!(
+		result.is_err(),
+		"FailureMode::DenyWithStatus should return Err"
+	);
+	let denied = result.unwrap_err();
+	assert_eq!(
+		denied.status_code,
+		::http::StatusCode::SERVICE_UNAVAILABLE,
+		"should use the configured 503 status"
+	);
+	assert_eq!(denied.body, "external authorization denied");
+}
+
+#[test]
+fn handle_auth_failure_deny_with_invalid_status_falls_back_to_403() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::DenyWithStatus(9999),
+		..Default::default()
+	});
+	let result = ea.handle_auth_failure("bad status");
+	assert!(result.is_err());
+	let denied = result.unwrap_err();
+	assert_eq!(
+		denied.status_code,
+		::http::StatusCode::FORBIDDEN,
+		"invalid status code should fall back to 403"
+	);
+}
+
+// MARK: check() protocol rejection tests
+
+fn make_test_snapshot() -> crate::cel::RequestSnapshot {
+	crate::cel::RequestSnapshot {
+		method: ::http::Method::POST,
+		path: ::http::Uri::from_static("/mcp"),
+		host: None,
+		scheme: None,
+		version: ::http::Version::HTTP_11,
+		headers: ::http::HeaderMap::new(),
+		body: None,
+		jwt: None,
+		api_key: None,
+		basic_auth: None,
+		backend: None,
+		source: None,
+		start_time: None,
+		extauthz: None,
+		extproc: None,
+		llm: None,
+	}
+}
+
+fn make_test_policy_client() -> crate::proxy::httpproxy::PolicyClient {
+	use crate::proxy::httpproxy::PolicyClient;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	PolicyClient {
+		inputs: setup_proxy_test("{}").unwrap().inputs(),
+	}
+}
+
+#[tokio::test]
+async fn check_with_http_protocol_returns_internal_server_error() {
+	use crate::http::ext_authz::ExtAuthz;
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		protocol: crate::http::ext_authz::Protocol::Http {
+			path: None,
+			redirect: None,
+			include_response_headers: Vec::new(),
+			add_request_headers: Default::default(),
+			metadata: Default::default(),
+		},
+		..Default::default()
+	});
+
+	let snapshot = make_test_snapshot();
+	let client = make_test_policy_client();
+	let result = ea.check(client, &snapshot, None).await;
+	assert!(result.is_err(), "HTTP protocol should be rejected");
+	let denied = result.unwrap_err();
+	assert_eq!(
+		denied.status_code,
+		::http::StatusCode::INTERNAL_SERVER_ERROR
+	);
+	assert!(
+		denied.body.contains("only supports gRPC"),
+		"error should mention gRPC requirement, got: {}",
+		denied.body
+	);
+}
+
+// MARK: check() transport failure tests
+
+#[tokio::test]
+async fn check_with_unreachable_server_respects_failure_mode_allow() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::Allow,
+		..Default::default()
+	});
+
+	let snapshot = make_test_snapshot();
+	let client = make_test_policy_client();
+	let result = ea.check(client, &snapshot, None).await;
+	assert!(
+		result.is_ok(),
+		"FailureMode::Allow should let request through on transport failure, got: {:?}",
+		result.unwrap_err()
+	);
+}
+
+#[tokio::test]
+async fn check_with_unreachable_server_respects_failure_mode_deny() {
+	use crate::http::ext_authz::{ExtAuthz, FailureMode};
+	use crate::mcp::ext_authz::McpExtAuthz;
+
+	let ea = McpExtAuthz(ExtAuthz {
+		failure_mode: FailureMode::Deny,
+		..Default::default()
+	});
+
+	let snapshot = make_test_snapshot();
+	let client = make_test_policy_client();
+	let result = ea.check(client, &snapshot, None).await;
+	assert!(
+		result.is_err(),
+		"FailureMode::Deny should reject on transport failure"
+	);
+	let denied = result.unwrap_err();
+	assert_eq!(denied.status_code, ::http::StatusCode::FORBIDDEN);
 }

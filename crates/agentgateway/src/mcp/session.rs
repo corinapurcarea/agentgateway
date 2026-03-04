@@ -195,7 +195,9 @@ impl Session {
 				}))
 				.into(),
 			),
-			Err(UpstreamError::ExtAuthzDenied(_)) => Err(ProxyError::ExternalAuthorizationFailed(None)),
+			Err(UpstreamError::ExtAuthzDenied(denied)) => {
+				Err(ProxyError::ExternalAuthorizationFailed(Some(denied.status_code)))
+			},
 			// TODO: this is too broad. We have a big tangle of errors to untangle though
 			Err(e) => Err(mcp::Error::SendError(req_id, e.to_string()).into()),
 		}

@@ -57,6 +57,40 @@ impl McpExtAuthz {
 		self.0.expressions()
 	}
 
+	pub fn failure_mode(&self) -> &FailureMode {
+		&self.0.failure_mode
+	}
+
+	/// Returns `Ok` if the failure mode allows the request through, or `Err` with
+	/// the appropriate denied response otherwise.
+	pub fn handle_auth_failure(&self, msg: &str) -> Result<McpExtAuthzOkResponse, McpExtAuthzDenied> {
+		match self.failure_mode() {
+			FailureMode::Allow => {
+				debug!("Allowing MCP request due to FailureMode::Allow: {msg}");
+				Ok(McpExtAuthzOkResponse::default())
+			},
+			FailureMode::Deny => Err(McpExtAuthzDenied {
+				status_code: StatusCode::FORBIDDEN,
+				body: "external authorization denied".to_string(),
+				..Default::default()
+			}),
+			FailureMode::DenyWithStatus(code) => {
+				let status_code = match StatusCode::from_u16(*code) {
+					Ok(s) => s,
+					Err(_) => {
+						warn!(configured_code = code, "invalid HTTP status code in DenyWithStatus, falling back to 403");
+						StatusCode::FORBIDDEN
+					},
+				};
+				Err(McpExtAuthzDenied {
+					status_code,
+					body: "external authorization denied".to_string(),
+					..Default::default()
+				})
+			},
+		}
+	}
+
 	/// Check external authorization using a request snapshot (for MCP backend-level authorization).
 	/// This uses the snapshot + optional MCP ResourceType to build the CEL context, allowing
 	/// ext_authz metadata expressions to reference MCP CEL variables like `mcp.tool.name`.
@@ -102,6 +136,9 @@ impl McpExtAuthz {
 			}
 		}
 
+		let (body, raw_body, body_size) =
+			extract_body(&self.0.include_request_body, snapshot.body.as_ref());
+
 		let request = crate::http::ext_authz::proto::attribute_context::Request {
 			time: Some(Timestamp::from(SystemTime::now())),
 			http: Some(HttpRequest {
@@ -126,9 +163,9 @@ impl McpExtAuthz {
 				protocol: "HTTP/1.1".to_string(),
 				query: String::new(),
 				fragment: String::new(),
-				size: 0,
-				body: String::new(),
-				raw_body: Vec::new(),
+				size: body_size,
+				body,
+				raw_body,
 			}),
 		};
 
@@ -152,22 +189,7 @@ impl McpExtAuthz {
 			Ok(response) => response,
 			Err(e) => {
 				warn!("mcp ext_authz request failed: {}", e);
-				return match &self.0.failure_mode {
-					FailureMode::Allow => {
-						debug!("Allowing MCP request due to FailureMode::Allow");
-						Ok(McpExtAuthzOkResponse::default())
-					},
-					FailureMode::Deny => Err(McpExtAuthzDenied {
-						status_code: StatusCode::FORBIDDEN,
-						body: "authorization service unavailable".to_string(),
-						..Default::default()
-					}),
-					FailureMode::DenyWithStatus(code) => Err(McpExtAuthzDenied {
-						status_code: StatusCode::from_u16(*code).unwrap_or(StatusCode::FORBIDDEN),
-						body: "authorization service unavailable".to_string(),
-						..Default::default()
-					}),
-				};
+				return self.handle_auth_failure("authorization service unavailable");
 			},
 		};
 		let cr = cr.into_inner();
@@ -197,9 +219,16 @@ impl McpExtAuthz {
 					headers: resp_headers,
 					body,
 				} = denied;
-				let code = http_status
-					.and_then(|s| StatusCode::from_u16(s.code as u16).ok())
-					.unwrap_or(StatusCode::FORBIDDEN);
+				let code = match http_status {
+					Some(s) => match StatusCode::from_u16(s.code as u16) {
+						Ok(sc) => sc,
+						Err(_) => {
+							warn!(ext_authz_status = s.code, "ext_authz returned invalid HTTP status code, falling back to 403");
+							StatusCode::FORBIDDEN
+						},
+					},
+					None => StatusCode::FORBIDDEN,
+				};
 				let mut hm = HeaderMap::new();
 				process_headers(&mut hm, resp_headers, None);
 				return Err(McpExtAuthzDenied {
@@ -239,6 +268,36 @@ impl McpExtAuthz {
 			}
 		}
 		Ok(ok_resp)
+	}
+}
+
+pub(crate) fn extract_body(
+	body_opts: &Option<crate::http::ext_authz::BodyOptions>,
+	buffered: Option<&crate::cel::BufferedBody>,
+) -> (String, Vec<u8>, i64) {
+	let (Some(body_opts), Some(buffered)) = (body_opts, buffered) else {
+		return (String::new(), Vec::new(), 0);
+	};
+	let max_size = body_opts.max_request_bytes as usize;
+	let bytes = &buffered.0;
+	let original_size = bytes.len() as i64;
+	let truncated = if bytes.len() > max_size {
+		if !body_opts.allow_partial_message {
+			&[]
+		} else {
+			&bytes[..max_size]
+		}
+	} else {
+		bytes.as_ref()
+	};
+	if body_opts.pack_as_bytes {
+		(String::new(), truncated.to_vec(), original_size)
+	} else {
+		(
+			String::from_utf8_lossy(truncated).into_owned(),
+			Vec::new(),
+			original_size,
+		)
 	}
 }
 
