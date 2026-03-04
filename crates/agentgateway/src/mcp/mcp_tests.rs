@@ -404,12 +404,25 @@ async fn ext_authz_denied_error_produces_json_rpc_response() {
 		"application/json"
 	);
 
-	let body_bytes = crate::http::body_to_bytes(resp.into_body()).await.unwrap();
-	let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("body should be valid JSON");
-	assert_eq!(json["jsonrpc"], "2.0");
-	assert_eq!(json["id"], 42);
-	assert_eq!(json["error"]["code"], rmcp::model::ErrorCode::INTERNAL_ERROR.code());
-	assert_eq!(json["error"]["message"], "insufficient permissions");
+	use http_body_util::BodyExt;
+	let body_bytes = resp
+		.into_body()
+		.collect()
+		.await
+		.unwrap()
+		.to_bytes();
+	let json: serde_json::Value =
+		serde_json::from_slice(&body_bytes).expect("body should be valid JSON");
+	assert_eq!(json["jsonrpc"], "2.0", "should be JSON-RPC 2.0");
+	assert_eq!(json["id"], 42, "should carry the request id");
+	assert_eq!(
+		json["error"]["code"], -32603,
+		"error code should be INTERNAL_ERROR (-32603)"
+	);
+	assert_eq!(
+		json["error"]["message"], "insufficient permissions",
+		"error message should propagate ext_authz body"
+	);
 }
 
 #[test]
