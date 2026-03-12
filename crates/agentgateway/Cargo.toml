@@ -9,16 +9,13 @@ publish = { workspace = true }
 path = "src/lib.rs"
 
 [features]
-default = ["tls-ring"]
+default = []
 jemalloc = ["dep:tikv-jemallocator", "dep:jemalloc_pprof"]
 ui = []
 schema = ["schemars"]
-tls-ring = ["rustls/ring", "tokio-rustls/ring"]
 internal_benches = ["divan"]
-testing = ["dep:reqwest"]
 
 [dependencies]
-a2a-sdk.workspace = true
 agent-core.workspace = true
 agent-celx.workspace = true
 agent-hbone.workspace = true
@@ -96,17 +93,17 @@ prost-types.workspace = true
 prost-wkt-types.workspace = true
 prost.workspace = true
 rand.workspace = true
+libc.workspace = true
 rcgen.workspace = true
 regex.workspace = true
 
-rmcp = { version = "0.15", features = [
+rmcp = { version = "0.16", features = [
     "client",
     "server",
     "base64",
     "transport-child-process",
 ] }
 rustls-native-certs.workspace = true
-rustls-pemfile.workspace = true
 rustls-pki-types.workspace = true
 rustls.workspace = true
 schemars = { workspace = true, optional = true }
@@ -142,7 +139,7 @@ typespec_client_core.workspace = true
 url.workspace = true
 uuid.workspace = true
 x509-parser.workspace = true
-reqwest = { optional = true, workspace = true }
+reqwest.workspace = true
 websocket-sans-io.workspace = true
 vector-map.workspace = true
 flagset.workspace = true
@@ -178,7 +175,7 @@ rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 which.workspace = true
-rmcp = { version = "0.15", features = [
+rmcp = { version = "0.16", features = [
     "client",
     "server",
     "base64",

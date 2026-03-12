@@ -155,7 +155,7 @@ pub mod from_embeddings {
 		let m = crate::llm::types::completions::typed::ChatCompletionErrorResponse {
 			event_id: None,
 			error: crate::llm::types::completions::typed::ChatCompletionError {
-				r#type: "invalid_request_error".to_string(),
+				r#type: Some("invalid_request_error".to_string()),
 				message: res.message,
 				param: None,
 				code: None,
@@ -180,11 +180,143 @@ pub mod from_completions {
 	use super::helpers;
 	use crate::http::Body;
 	use crate::llm::bedrock::Provider;
+	use crate::llm::conversion::completions::{extract_system_text, parse_data_url};
 	use crate::llm::types::ResponseType;
 	use crate::llm::types::completions::typed::UsagePromptDetails;
-	use crate::llm::{AIError, LLMInfo, types};
-	use crate::telemetry::log::AsyncLog;
+	use crate::llm::{AIError, AmendOnDrop, types};
+
 	use crate::{json, parse};
+
+	fn text_blocks_from_user_content(
+		content: &completions::RequestUserMessageContent,
+	) -> Vec<bedrock::ContentBlock> {
+		let mut out = Vec::new();
+		match content {
+			completions::RequestUserMessageContent::Text(text) => {
+				if !text.trim().is_empty() {
+					out.push(bedrock::ContentBlock::Text(text.clone()));
+				}
+			},
+			completions::RequestUserMessageContent::Array(parts) => {
+				for part in parts {
+					match part {
+						completions::RequestUserMessageContentPart::Text(text) => {
+							if !text.text.trim().is_empty() {
+								out.push(bedrock::ContentBlock::Text(text.text.clone()));
+							}
+						},
+						completions::RequestUserMessageContentPart::ImageUrl(image) => {
+							if let Some((media_type, data)) = parse_data_url(&image.image_url.url) {
+								let format = media_type
+									.strip_prefix("image/")
+									.unwrap_or(media_type)
+									.to_string();
+								out.push(bedrock::ContentBlock::Image(bedrock::ImageBlock {
+									format,
+									source: bedrock::ImageSource {
+										bytes: data.to_string(),
+									},
+								}));
+							}
+						},
+						completions::RequestUserMessageContentPart::InputAudio(_)
+						| completions::RequestUserMessageContentPart::File(_) => {},
+					}
+				}
+			},
+		}
+		out
+	}
+
+	fn assistant_content_to_bedrock(
+		msg: &completions::RequestAssistantMessage,
+	) -> Vec<bedrock::ContentBlock> {
+		let mut content = Vec::new();
+		if let Some(content_field) = &msg.content {
+			match content_field {
+				completions::RequestAssistantMessageContent::Text(text) => {
+					if !text.trim().is_empty() {
+						content.push(bedrock::ContentBlock::Text(text.to_string()));
+					}
+				},
+				completions::RequestAssistantMessageContent::Array(parts) => {
+					for part in parts {
+						match part {
+							completions::RequestAssistantMessageContentPart::Text(text) => {
+								if !text.text.trim().is_empty() {
+									content.push(bedrock::ContentBlock::Text(text.text.clone()));
+								}
+							},
+							completions::RequestAssistantMessageContentPart::Refusal(refusal) => {
+								if !refusal.refusal.trim().is_empty() {
+									content.push(bedrock::ContentBlock::Text(refusal.refusal.clone()));
+								}
+							},
+						}
+					}
+				},
+			}
+		}
+		if let Some(refusal) = &msg.refusal
+			&& !refusal.trim().is_empty()
+		{
+			content.push(bedrock::ContentBlock::Text(refusal.clone()));
+		}
+
+		if let Some(tool_calls) = &msg.tool_calls {
+			for call in tool_calls {
+				match call {
+					completions::MessageToolCalls::Function(call) => {
+						let input = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+							.unwrap_or_else(|_| serde_json::Value::String(call.function.arguments.clone()));
+						content.push(bedrock::ContentBlock::ToolUse(bedrock::ToolUseBlock {
+							tool_use_id: call.id.clone(),
+							name: call.function.name.clone(),
+							input,
+						}));
+					},
+					completions::MessageToolCalls::Custom(call) => {
+						let input = serde_json::from_str::<serde_json::Value>(&call.custom_tool.input)
+							.unwrap_or_else(|_| serde_json::Value::String(call.custom_tool.input.clone()));
+						content.push(bedrock::ContentBlock::ToolUse(bedrock::ToolUseBlock {
+							tool_use_id: call.id.clone(),
+							name: call.custom_tool.name.clone(),
+							input,
+						}));
+					},
+				}
+			}
+		}
+		content
+	}
+
+	fn tool_content_to_bedrock(msg: &completions::RequestToolMessage) -> Vec<bedrock::ContentBlock> {
+		let content = match &msg.content {
+			completions::RequestToolMessageContent::Text(text) => {
+				vec![bedrock::ToolResultContentBlock::Text(text.to_string())]
+			},
+			completions::RequestToolMessageContent::Array(parts) => parts
+				.iter()
+				.map(|part| match part {
+					completions::RequestToolMessageContentPart::Text(text) => {
+						bedrock::ToolResultContentBlock::Text(text.text.clone())
+					},
+				})
+				.collect(),
+		};
+		if content.is_empty() {
+			return Vec::new();
+		}
+		vec![bedrock::ContentBlock::ToolResult(
+			bedrock::ToolResultBlock {
+				tool_use_id: msg.tool_call_id.clone(),
+				content,
+				// OpenAI tool messages do not carry explicit success/error status.
+				// Keep this unset rather than asserting success.
+				status: None,
+			},
+		)]
+	}
 
 	/// translate an OpenAI completions request to a Bedrock converse  request
 	pub fn translate(
@@ -210,31 +342,56 @@ pub mod from_completions {
 		let system_text = req
 			.messages
 			.iter()
-			.filter_map(|msg| {
-				if completions::message_role(msg) == completions::SYSTEM_ROLE {
-					completions::message_text(msg).map(|s| s.to_string())
-				} else {
-					None
-				}
-			})
+			.filter_map(extract_system_text)
 			.collect::<Vec<String>>()
 			.join("\n");
 
 		let messages = req
 			.messages
 			.iter()
-			.filter(|msg| completions::message_role(msg) != completions::SYSTEM_ROLE)
-			.filter_map(|msg| {
-				let role = match completions::message_role(msg) {
-					completions::ASSISTANT_ROLE => bedrock::Role::Assistant,
-					// Default to user for other roles
-					_ => bedrock::Role::User,
-				};
-
-				completions::message_text(msg)
+			.filter_map(|msg| match msg {
+				completions::RequestMessage::System(_) | completions::RequestMessage::Developer(_) => None,
+				completions::RequestMessage::User(user) => {
+					let content = text_blocks_from_user_content(&user.content);
+					if content.is_empty() {
+						None
+					} else {
+						Some(bedrock::Message {
+							role: bedrock::Role::User,
+							content,
+						})
+					}
+				},
+				completions::RequestMessage::Assistant(assistant) => {
+					let content = assistant_content_to_bedrock(assistant);
+					if content.is_empty() {
+						None
+					} else {
+						Some(bedrock::Message {
+							role: bedrock::Role::Assistant,
+							content,
+						})
+					}
+				},
+				completions::RequestMessage::Tool(tool_result) => {
+					let content = tool_content_to_bedrock(tool_result);
+					if content.is_empty() {
+						None
+					} else {
+						Some(bedrock::Message {
+							role: bedrock::Role::User,
+							content,
+						})
+					}
+				},
+				completions::RequestMessage::Function(function) => function
+					.content
+					.as_ref()
 					.filter(|s| !s.trim().is_empty())
-					.map(|s| vec![bedrock::ContentBlock::Text(s.to_string())])
-					.map(|content| bedrock::Message { role, content })
+					.map(|s| bedrock::Message {
+						role: bedrock::Role::User,
+						content: vec![bedrock::ContentBlock::Text(s.clone())],
+					}),
 			})
 			.collect();
 
@@ -329,42 +486,26 @@ pub mod from_completions {
 		});
 		let tool_config = tools.map(|tools| bedrock::ToolConfiguration { tools, tool_choice });
 
-		// Handle thinking configuration similar to Anthropic
-		let thinking = if let Some(budget) = req.vendor_extensions.thinking_budget_tokens {
-			Some(serde_json::json!({
+		let explicit_thinking_budget = req.vendor_extensions.thinking_budget_tokens;
+		let enabled_thinking_budget = explicit_thinking_budget.or_else(|| {
+			req
+				.reasoning_effort
+				.as_ref()
+				.and_then(reasoning_effort_to_enabled_budget)
+		});
+
+		let additional_model_request_fields = enabled_thinking_budget.map(|budget| {
+			serde_json::json!({
 				"thinking": {
 					"type": "enabled",
 					"budget_tokens": budget
 				}
-			}))
-		} else {
-			match &req.reasoning_effort {
-				// Note: Anthropic's minimum budget_tokens is 1024
-				Some(completions::ReasoningEffort::Minimal) | Some(completions::ReasoningEffort::Low) => {
-					Some(serde_json::json!({
-						"thinking": {
-							"type": "enabled",
-							"budget_tokens": 1024
-						}
-					}))
-				},
-				Some(completions::ReasoningEffort::Medium) => Some(serde_json::json!({
-					"thinking": {
-						"type": "enabled",
-						"budget_tokens": 2048
-					}
-				})),
-				Some(completions::ReasoningEffort::High) | Some(completions::ReasoningEffort::Xhigh) => {
-					Some(serde_json::json!({
-						"thinking": {
-							"type": "enabled",
-							"budget_tokens": 4096
-						}
-					}))
-				},
-				Some(completions::ReasoningEffort::None) | None => None,
-			}
-		};
+			})
+		});
+		let output_config = req
+			.response_format
+			.as_ref()
+			.and_then(completions_response_format_to_bedrock_output_config);
 
 		let supports_caching = helpers::supports_prompt_caching(&model_id);
 		let system_content = if system_text.is_empty() {
@@ -400,9 +541,10 @@ pub mod from_completions {
 			messages,
 			system: system_content,
 			inference_config: Some(inference_config),
+			output_config,
 			tool_config,
 			guardrail_config,
-			additional_model_request_fields: thinking,
+			additional_model_request_fields,
 			prompt_variables: None,
 			additional_model_response_field_paths: None,
 			request_metadata: metadata,
@@ -425,6 +567,63 @@ pub mod from_completions {
 		}
 
 		bedrock_request
+	}
+
+	fn reasoning_effort_to_enabled_budget(effort: &completions::ReasoningEffort) -> Option<u64> {
+		match effort {
+			completions::ReasoningEffort::None => None,
+			completions::ReasoningEffort::Minimal | completions::ReasoningEffort::Low => Some(1024),
+			completions::ReasoningEffort::Medium => Some(2048),
+			completions::ReasoningEffort::High | completions::ReasoningEffort::Xhigh => Some(4096),
+		}
+	}
+
+	fn completions_response_format_to_bedrock_output_config(
+		response_format: &completions::ResponseFormat,
+	) -> Option<bedrock::OutputConfig> {
+		let (name, description, schema) = match response_format {
+			completions::ResponseFormat::Text => return None,
+			completions::ResponseFormat::JsonObject => (
+				None,
+				None,
+				std::borrow::Cow::Owned(
+					serde_json::json!({ "type": "object", "additionalProperties": true }),
+				),
+			),
+			completions::ResponseFormat::JsonSchema { json_schema } => {
+				let Some(schema) = json_schema.schema.as_ref() else {
+					tracing::warn!(
+						"Dropping response_format.json_schema for Bedrock conversion because schema is missing"
+					);
+					return None;
+				};
+				(
+					Some(json_schema.name.clone()),
+					json_schema.description.clone(),
+					std::borrow::Cow::Borrowed(schema),
+				)
+			},
+		};
+
+		let Ok(schema_json) = serde_json::to_string(schema.as_ref()) else {
+			tracing::warn!(
+				"Dropping structured output for Bedrock conversion: schema is not serializable"
+			);
+			return None;
+		};
+
+		Some(bedrock::OutputConfig {
+			text_format: Some(bedrock::OutputFormat {
+				r#type: bedrock::OutputFormatType::JsonSchema,
+				structure: bedrock::OutputFormatStructure {
+					json_schema: bedrock::JsonSchemaDefinition {
+						schema: schema_json,
+						name,
+						description,
+					},
+				},
+			}),
+		})
 	}
 
 	pub fn translate_response(bytes: &Bytes, model: &str) -> Result<Box<dyn ResponseType>, AIError> {
@@ -450,7 +649,7 @@ pub mod from_completions {
 		let m = completions::ChatCompletionErrorResponse {
 			event_id: None,
 			error: completions::ChatCompletionError {
-				r#type: "invalid_request_error".to_string(),
+				r#type: Some("invalid_request_error".to_string()),
 				message: res.message,
 				param: None,
 				code: None,
@@ -465,7 +664,7 @@ pub mod from_completions {
 	pub fn translate_stream(
 		b: Body,
 		_buffer_limit: usize,
-		log: AsyncLog<LLMInfo>,
+		log: AmendOnDrop,
 		model: &str,
 		message_id: &str,
 	) -> Body {
@@ -666,6 +865,7 @@ pub mod from_completions {
 }
 
 pub mod from_messages {
+	use agent_core::strng;
 	use std::collections::HashSet;
 	use std::time::Instant;
 
@@ -677,8 +877,8 @@ pub mod from_messages {
 	use crate::http::Body;
 	use crate::llm::bedrock::Provider;
 	use crate::llm::types::ResponseType;
-	use crate::llm::{AIError, LLMInfo, types};
-	use crate::telemetry::log::AsyncLog;
+	use crate::llm::{AIError, AmendOnDrop, types};
+
 	use crate::{json, parse};
 
 	/// translate an Anthropic messages request to a Bedrock converse request
@@ -688,7 +888,7 @@ pub mod from_messages {
 		headers: Option<&http::HeaderMap>,
 	) -> Result<Vec<u8>, AIError> {
 		let typed = json::convert::<_, messages::Request>(req).map_err(AIError::RequestMarshal)?;
-		let xlated = translate_internal(typed, provider, headers);
+		let xlated = translate_internal(typed, provider, headers)?;
 		serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)
 	}
 
@@ -696,11 +896,41 @@ pub mod from_messages {
 		req: messages::Request,
 		provider: &Provider,
 		headers: Option<&http::HeaderMap>,
-	) -> bedrock::ConverseRequest {
+	) -> Result<bedrock::ConverseRequest, AIError> {
 		let mut cache_points_used = 0;
+		// Converse placement note (AWS docs):
+		// - Anthropic-specific params are sent via additionalModelRequestFields for Converse:
+		//   https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-call.html
+		//   https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+		// - Adaptive thinking knob is thinking.type = "adaptive":
+		//   https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-adaptive-thinking.html
+		// - Effort knob is output_config.effort in Anthropic request shape:
+		//   https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+		let requested_thinking = req.thinking.as_ref();
+		let requested_output_config = req.output_config.as_ref();
+		let output_config = requested_output_config
+			.and_then(|cfg| cfg.format.as_ref())
+			.and_then(messages_output_format_to_bedrock_output_config);
+		let requested_output_config_json = requested_output_config.and_then(|cfg| {
+			let mut output_config = serde_json::Map::new();
+			if let Some(effort) = cfg.effort {
+				output_config.insert("effort".to_string(), serde_json::json!(effort));
+			}
+			if output_config.is_empty() {
+				// Preserve an explicitly empty output_config when present in the input request.
+				if cfg.format.is_none() {
+					Some(serde_json::Value::Object(output_config))
+				} else {
+					None
+				}
+			} else {
+				Some(serde_json::Value::Object(output_config))
+			}
+		});
 
-		// Check if thinking is enabled (Bedrock constraint: thinking requires specific tool/temp settings)
-		let thinking_enabled = req.thinking.is_some();
+		// Bedrock applies strict inference/tool-choice constraints only to explicit extended thinking.
+		let thinking_enabled = requested_thinking
+			.is_some_and(|thinking| matches!(thinking, messages::ThinkingInput::Enabled { .. }));
 
 		// Convert system prompt to Bedrock format with cache point insertion
 		// Note: Anthropic MessagesRequest.system is Option<SystemPrompt>, Bedrock wants Option<Vec<SystemContentBlock>>
@@ -738,7 +968,7 @@ pub mod from_messages {
 		let messages: Vec<bedrock::Message> = req
 			.messages
 			.into_iter()
-			.map(|msg| {
+			.map(|msg| -> Result<bedrock::Message, AIError> {
 				let role = match msg.role {
 					messages::Role::Assistant => bedrock::Role::Assistant,
 					messages::Role::User => bedrock::Role::User,
@@ -772,11 +1002,13 @@ pub mod from_messages {
 										},
 									}),
 									cache_control.is_some(),
-								)
-							} else {
-								continue;
-							}
-						},
+									)
+								} else {
+									return Err(AIError::UnsupportedConversion(strng::literal!(
+										"bedrock image source must be base64 (media_type + data); URL image sources are unsupported"
+									)));
+								}
+							},
 						messages::ContentBlock::ToolUse {
 							id,
 							name,
@@ -875,14 +1107,14 @@ pub mod from_messages {
 					}
 				}
 
-				bedrock::Message { role, content }
-			})
-			.collect();
+					Ok(bedrock::Message { role, content })
+				})
+				.collect::<Result<Vec<_>, AIError>>()?;
 
 		// Build inference config from typed fields
 		let inference_config = bedrock::InferenceConfiguration {
 			max_tokens: req.max_tokens,
-			// When thinking is enabled, temperature/top_p/top_k must be None (Bedrock constraint)
+			// Extended thinking requires temperature/top_p/top_k to be unset.
 			temperature: if thinking_enabled {
 				None
 			} else {
@@ -919,22 +1151,22 @@ pub mod from_messages {
 				None
 			} else {
 				let tool_choice = match req.tool_choice {
-					Some(messages::ToolChoice::Auto) => {
+					Some(messages::ToolChoice::Auto { .. }) => {
 						if thinking_enabled {
 							Some(bedrock::ToolChoice::Any)
 						} else {
 							Some(bedrock::ToolChoice::Auto)
 						}
 					},
-					Some(messages::ToolChoice::Any) => Some(bedrock::ToolChoice::Any),
-					Some(messages::ToolChoice::Tool { name }) => {
+					Some(messages::ToolChoice::Any { .. }) => Some(bedrock::ToolChoice::Any),
+					Some(messages::ToolChoice::Tool { name, .. }) => {
 						if thinking_enabled {
 							Some(bedrock::ToolChoice::Any)
 						} else {
 							Some(bedrock::ToolChoice::Tool { name })
 						}
 					},
-					Some(messages::ToolChoice::None) | None => {
+					Some(messages::ToolChoice::None {}) | None => {
 						if thinking_enabled {
 							Some(bedrock::ToolChoice::Any)
 						} else {
@@ -952,44 +1184,42 @@ pub mod from_messages {
 			None
 		};
 
-		// Convert thinking from typed field and handle beta headers
-		let mut additional_fields = req.thinking.map(|thinking| match thinking {
-			messages::ThinkingInput::Enabled { budget_tokens } => serde_json::json!({
-				"thinking": {
+		// Build Anthropic model-specific fields under Converse's additionalModelRequestFields.
+		let mut additional_fields = requested_thinking.map(|thinking| {
+			let thinking_json = match thinking {
+				messages::ThinkingInput::Enabled { budget_tokens } => serde_json::json!({
 					"type": "enabled",
 					"budget_tokens": budget_tokens
-				}
-			}),
-			messages::ThinkingInput::Disabled {} => serde_json::json!({
-				"thinking": {
+				}),
+				messages::ThinkingInput::Disabled {} => serde_json::json!({
 					"type": "disabled"
-				}
-			}),
+				}),
+				messages::ThinkingInput::Adaptive {} => serde_json::json!({
+					"type": "adaptive"
+				}),
+			};
+			serde_json::json!({ "thinking": thinking_json })
 		});
+		let mut upsert_additional_field = |key: &str, value: serde_json::Value| {
+			let fields =
+				additional_fields.get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+			fields
+				.as_object_mut()
+				.expect("additional model request fields must be a JSON object")
+				.insert(key.to_string(), value);
+		};
+
+		// Preserve explicit output_config in Anthropic's model-specific envelope.
+		if let Some(output_config) = requested_output_config_json {
+			upsert_additional_field("output_config", output_config);
+		}
 
 		// Extract beta headers from HTTP headers if provided
 		let beta_headers = headers.and_then(|h| helpers::extract_beta_headers(h).ok().flatten());
 
 		if let Some(beta_array) = beta_headers {
-			// Add beta headers to additionalModelRequestFields
-			match additional_fields {
-				Some(ref mut fields) => {
-					if let Some(existing_obj) = fields.as_object_mut() {
-						existing_obj.insert(
-							"anthropic_beta".to_string(),
-							serde_json::Value::Array(beta_array),
-						);
-					}
-				},
-				None => {
-					let mut fields = serde_json::Map::new();
-					fields.insert(
-						"anthropic_beta".to_string(),
-						serde_json::Value::Array(beta_array),
-					);
-					additional_fields = Some(serde_json::Value::Object(fields));
-				},
-			}
+			// Add beta headers to additionalModelRequestFields.
+			upsert_additional_field("anthropic_beta", serde_json::Value::Array(beta_array));
 		}
 
 		// Build guardrail configuration if provider has it configured
@@ -1019,11 +1249,12 @@ pub mod from_messages {
 			Some(metadata)
 		};
 
-		bedrock::ConverseRequest {
+		Ok(bedrock::ConverseRequest {
 			model_id: req.model,
 			messages,
 			system: system_content,
 			inference_config: Some(inference_config),
+			output_config,
 			tool_config,
 			guardrail_config,
 			additional_model_request_fields: additional_fields,
@@ -1031,7 +1262,34 @@ pub mod from_messages {
 			additional_model_response_field_paths: None,
 			request_metadata: metadata,
 			performance_config: None,
-		}
+		})
+	}
+
+	fn messages_output_format_to_bedrock_output_config(
+		format: &messages::OutputFormat,
+	) -> Option<bedrock::OutputConfig> {
+		let schema = match format {
+			messages::OutputFormat::JsonSchema { schema } => schema,
+		};
+		let Ok(schema_json) = serde_json::to_string(schema) else {
+			tracing::warn!(
+				"Dropping output_config.format for Bedrock conversion: schema is not serializable"
+			);
+			return None;
+		};
+
+		Some(bedrock::OutputConfig {
+			text_format: Some(bedrock::OutputFormat {
+				r#type: bedrock::OutputFormatType::JsonSchema,
+				structure: bedrock::OutputFormatStructure {
+					json_schema: bedrock::JsonSchemaDefinition {
+						schema: schema_json,
+						name: None,
+						description: None,
+					},
+				},
+			}),
+		})
 	}
 
 	pub fn translate_response(bytes: &Bytes, model: &str) -> Result<Box<dyn ResponseType>, AIError> {
@@ -1069,7 +1327,7 @@ pub mod from_messages {
 	pub fn translate_stream(
 		b: Body,
 		_buffer_limit: usize,
-		log: AsyncLog<LLMInfo>,
+		log: AmendOnDrop,
 		model: &str,
 		_message_id: &str,
 	) -> Body {
@@ -1301,8 +1559,8 @@ pub mod from_messages {
 
 	fn to_anthropic_message_delta_usage(usage: bedrock::TokenUsage) -> messages::MessageDeltaUsage {
 		messages::MessageDeltaUsage {
-			input_tokens: usage.input_tokens,
-			output_tokens: usage.output_tokens,
+			input_tokens: Some(usage.input_tokens),
+			output_tokens: Some(usage.output_tokens),
 			cache_creation_input_tokens: usage.cache_write_input_tokens,
 			cache_read_input_tokens: usage.cache_read_input_tokens,
 		}
@@ -1331,8 +1589,8 @@ pub mod from_responses {
 	use crate::http::Body;
 	use crate::llm::bedrock::Provider;
 	use crate::llm::types::ResponseType;
-	use crate::llm::{AIError, LLMInfo, types};
-	use crate::telemetry::log::AsyncLog;
+	use crate::llm::{AIError, AmendOnDrop, types};
+
 	use crate::{json, parse};
 
 	/// translate an OpenAI responses request to a Bedrock converse request
@@ -1344,13 +1602,22 @@ pub mod from_responses {
 	) -> Result<Vec<u8>, AIError> {
 		let typed =
 			json::convert::<_, responses::CreateResponse>(req).map_err(AIError::RequestMarshal)?;
+		let explicit_thinking_budget = extract_responses_thinking_budget_tokens(req);
 		let model_id = typed.model.clone().unwrap_or_default();
-		let xlated = translate_internal(typed, model_id, provider, headers, prompt_caching);
+		let xlated = translate_internal(
+			typed,
+			explicit_thinking_budget,
+			model_id,
+			provider,
+			headers,
+			prompt_caching,
+		);
 		serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)
 	}
 
 	pub(super) fn translate_internal(
 		req: responses::CreateResponse,
+		explicit_thinking_budget: Option<u64>,
 		model_id: String,
 		provider: &Provider,
 		headers: Option<&http::HeaderMap>,
@@ -1518,7 +1785,9 @@ pub mod from_responses {
 							bedrock::ToolResultBlock {
 								tool_use_id: output.call_id,
 								content: vec![bedrock::ToolResultContentBlock::Text(output_text)],
-								status: Some(bedrock::ToolResultStatus::Success),
+								// Responses tool outputs do not carry explicit success/error metadata.
+								// Leave Bedrock status unset instead of assuming success.
+								status: None,
 							},
 						)],
 					});
@@ -1556,7 +1825,9 @@ pub mod from_responses {
 							bedrock::ToolResultBlock {
 								tool_use_id: call_id,
 								content: vec![bedrock::ToolResultContentBlock::Text(output_text)],
-								status: Some(bedrock::ToolResultStatus::Success),
+								// Responses tool outputs do not carry explicit success/error metadata.
+								// Leave Bedrock status unset instead of assuming success.
+								status: None,
 							},
 						)],
 					});
@@ -1610,6 +1881,25 @@ pub mod from_responses {
 			top_k: None,
 			stop_sequences: vec![],
 		};
+		let output_config = req
+			.text
+			.as_ref()
+			.and_then(responses_text_format_to_bedrock_output_config);
+		let enabled_thinking_budget = explicit_thinking_budget.or_else(|| {
+			req
+				.reasoning
+				.as_ref()
+				.and_then(|r| r.effort.as_ref())
+				.and_then(responses_reasoning_effort_to_enabled_budget)
+		});
+		let additional_model_request_fields = enabled_thinking_budget.map(|budget| {
+			serde_json::json!({
+				"thinking": {
+					"type": "enabled",
+					"budget_tokens": budget
+				}
+			})
+		});
 
 		// Convert tools from typed Responses API format to Bedrock format
 		let (tools, tool_choice) = if let Some(response_tools) = &req.tools {
@@ -1681,7 +1971,7 @@ pub mod from_responses {
 		};
 
 		// Extract metadata from request body and merge with headers (consistent with Messages/Completions)
-		let mut metadata = req.metadata.clone().unwrap_or_default();
+		let mut metadata = req.metadata.unwrap_or_default();
 
 		if let Some(header_metadata) = extract_metadata_from_headers(headers) {
 			metadata.extend(header_metadata);
@@ -1698,9 +1988,10 @@ pub mod from_responses {
 			messages,
 			system: system_content,
 			inference_config: Some(inference_config),
+			output_config,
 			tool_config,
 			guardrail_config,
-			additional_model_request_fields: None,
+			additional_model_request_fields,
 			prompt_variables: None,
 			additional_model_response_field_paths: None,
 			request_metadata: metadata,
@@ -1745,6 +2036,70 @@ pub mod from_responses {
 		bedrock_request
 	}
 
+	fn extract_responses_thinking_budget_tokens(req: &types::responses::Request) -> Option<u64> {
+		req
+			.vendor_extensions
+			.as_ref()
+			.and_then(|v| v.thinking_budget_tokens)
+	}
+
+	fn responses_reasoning_effort_to_enabled_budget(
+		effort: &responses::ReasoningEffort,
+	) -> Option<u64> {
+		match effort {
+			responses::ReasoningEffort::None => None,
+			responses::ReasoningEffort::Minimal | responses::ReasoningEffort::Low => Some(1024),
+			responses::ReasoningEffort::Medium => Some(2048),
+			responses::ReasoningEffort::High | responses::ReasoningEffort::Xhigh => Some(4096),
+		}
+	}
+
+	fn responses_text_format_to_bedrock_output_config(
+		text: &responses::ResponseTextParam,
+	) -> Option<bedrock::OutputConfig> {
+		let (name, description, schema) = match &text.format {
+			responses::TextResponseFormatConfiguration::Text => return None,
+			responses::TextResponseFormatConfiguration::JsonObject => (
+				None,
+				None,
+				std::borrow::Cow::Owned(
+					serde_json::json!({ "type": "object", "additionalProperties": true }),
+				),
+			),
+			responses::TextResponseFormatConfiguration::JsonSchema(json_schema) => {
+				let Some(schema) = json_schema.schema.as_ref() else {
+					tracing::warn!(
+						"Dropping text.format.json_schema for Bedrock conversion because schema is missing"
+					);
+					return None;
+				};
+				(
+					Some(json_schema.name.clone()),
+					json_schema.description.clone(),
+					std::borrow::Cow::Borrowed(schema),
+				)
+			},
+		};
+
+		let Ok(schema_json) = serde_json::to_string(schema.as_ref()) else {
+			tracing::warn!("Dropping text.format for Bedrock conversion: schema is not serializable");
+			return None;
+		};
+
+		Some(bedrock::OutputConfig {
+			text_format: Some(bedrock::OutputFormat {
+				r#type: bedrock::OutputFormatType::JsonSchema,
+				structure: bedrock::OutputFormatStructure {
+					json_schema: bedrock::JsonSchemaDefinition {
+						schema: schema_json,
+						name,
+						description,
+					},
+				},
+			}),
+		})
+	}
+
 	pub fn translate_response(bytes: &Bytes, model: &str) -> Result<Box<dyn ResponseType>, AIError> {
 		let resp = serde_json::from_slice::<bedrock::ConverseResponse>(bytes)
 			.map_err(AIError::ResponseParsing)?;
@@ -1768,7 +2123,7 @@ pub mod from_responses {
 		let m = crate::llm::types::completions::typed::ChatCompletionErrorResponse {
 			event_id: None,
 			error: crate::llm::types::completions::typed::ChatCompletionError {
-				r#type: "invalid_request_error".to_string(),
+				r#type: Some("invalid_request_error".to_string()),
 				message: res.message,
 				param: None,
 				code: None,
@@ -1783,7 +2138,7 @@ pub mod from_responses {
 	pub fn translate_stream(
 		b: Body,
 		_buffer_limit: usize,
-		log: AsyncLog<LLMInfo>,
+		log: AmendOnDrop,
 		model: &str,
 		_message_id: &str,
 	) -> Body {
@@ -1803,8 +2158,7 @@ pub mod from_responses {
 		let message_item_id = format!("msg_{:016x}", rand::rng().random::<u64>());
 		let model = model.to_string();
 
-		let response_builder =
-			crate::llm::types::responses::ResponseBuilder::new(response_id.clone(), model.clone());
+		let response_builder = crate::llm::types::responses::ResponseBuilder::new(response_id, model);
 
 		let make_output_part = |text: String| {
 			OutputContent::OutputText(OutputTextContent {

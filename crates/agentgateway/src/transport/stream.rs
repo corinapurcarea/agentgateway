@@ -116,9 +116,16 @@ impl Connection for Socket {
 	}
 }
 
+// Signal we are HttpProxying
+#[derive(Debug, Clone, Default)]
+pub struct HttpProxy;
+
 impl hyper_util_fork::client::legacy::connect::Connection for Socket {
 	fn connected(&self) -> hyper_util_fork::client::legacy::connect::Connected {
 		let mut con = hyper_util_fork::client::legacy::connect::Connected::new();
+		if self.ext.get::<HttpProxy>().is_some() {
+			con = con.proxy(true);
+		}
 		match self
 			.ext
 			.get::<TLSConnectionInfo>()
@@ -191,9 +198,18 @@ impl Socket {
 	}
 
 	pub fn from_tls(
+		ext: Extension,
+		metrics: Metrics,
+		tls: TlsStream<Box<SocketType>>,
+	) -> anyhow::Result<Self> {
+		Self::from_tls_with_identity(ext, metrics, tls, true)
+	}
+
+	pub fn from_tls_with_identity(
 		mut ext: Extension,
 		metrics: Metrics,
 		tls: TlsStream<Box<SocketType>>,
+		include_src_identity: bool,
 	) -> anyhow::Result<Self> {
 		let info = {
 			let server_name = match &tls {
@@ -205,7 +221,11 @@ impl Socket {
 			};
 			let (_, ssl) = tls.get_ref();
 			TLSConnectionInfo {
-				src_identity: crate::transport::tls::identity_from_connection(ssl),
+				src_identity: if include_src_identity {
+					crate::transport::tls::identity_from_connection(ssl)
+				} else {
+					None
+				},
 				negotiated_alpn: ssl.alpn_protocol().map(Alpn::from),
 				server_name,
 			}
@@ -221,6 +241,18 @@ impl Socket {
 	pub fn from_hbone(ext: Arc<Extension>, hbone_address: SocketAddr, hbone: RWStream) -> Self {
 		let mut ext = Extension::wrap(ext);
 		ext.insert(HBONEConnectionInfo { hbone_address });
+		// Update TCPConnectionInfo.local_addr with the original destination from the HBONE
+		// CONNECT :authority header. Without this, downstream consumers (ext_authz, CEL policy
+		// evaluation, telemetry) would see the HBONE listener port (15008) instead of the
+		// original service port.
+		// Note: peer_addr is the original client IP (ztunnel preserves the source address).
+		// Client identity comes from mTLS (TLSConnectionInfo).
+		if let Some(tcp) = ext.get::<TCPConnectionInfo>().cloned() {
+			ext.insert(TCPConnectionInfo {
+				local_addr: hbone_address,
+				..tcp
+			});
+		}
 
 		Socket {
 			ext,

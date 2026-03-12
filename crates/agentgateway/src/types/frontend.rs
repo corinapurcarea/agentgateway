@@ -125,4 +125,51 @@ pub struct LoggingPolicy {
 	)]
 	#[serde(default, skip_serializing_if = "FzHashSet::is_empty")]
 	pub remove: Arc<FzHashSet<String>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub otlp: Option<OtlpLoggingConfig>,
+	#[serde(skip)]
+	#[cfg_attr(feature = "schema", schemars(skip))]
+	pub access_log_policy: Option<Arc<super::agent::AccessLogPolicy>>,
+}
+
+impl LoggingPolicy {
+	/// Initializes the shared `AccessLogPolicy` from the OTLP config, if present.
+	/// Must be called after deserialization so the `OnceCell`-backed logger is
+	/// shared across requests instead of being recreated each time.
+	pub fn init_access_log_policy(&mut self) {
+		if let Some(otlp_cfg) = &self.otlp {
+			self.access_log_policy = Some(Arc::new(super::agent::AccessLogPolicy {
+				config: otlp_cfg.clone(),
+				logger: once_cell::sync::OnceCell::new(),
+			}));
+		}
+	}
+}
+
+#[apply(schema!)]
+pub struct OtlpLoggingConfig {
+	#[serde(flatten)]
+	pub provider_backend: super::agent::SimpleBackendReference,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "Option<crate::types::local::SimpleLocalBackendPolicies>")
+	)]
+	pub policies: Vec<super::agent::BackendPolicy>,
+	#[serde(default)]
+	pub protocol: super::agent::TracingProtocol,
+	#[serde(
+		default = "default_logs_path",
+		skip_serializing_if = "is_default_logs_path"
+	)]
+	pub path: String,
+}
+
+fn default_logs_path() -> String {
+	"/v1/logs".to_string()
+}
+
+fn is_default_logs_path(path: &str) -> bool {
+	path == "/v1/logs"
 }

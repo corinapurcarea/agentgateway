@@ -114,7 +114,7 @@ func (r *ReportMap) newGatewayReport(gateway *gwv1.Gateway) *GatewayReport {
 func (r *ReportMap) ListenerSet(listenerSet client.Object) *ListenerSetReport {
 	gvk := listenerSet.GetObjectKind().GroupVersionKind()
 	if gvk.Empty() {
-		gvk = wellknown.XListenerSetGVK
+		gvk = wellknown.ListenerSetGVK
 	}
 	if r.ListenerSets[gvk] == nil {
 		r.ListenerSets[gvk] = make(map[types.NamespacedName]*ListenerSetReport)
@@ -130,7 +130,7 @@ func (r *ReportMap) newListenerSetReport(listenerSet client.Object) *ListenerSet
 
 	gvk := listenerSet.GetObjectKind().GroupVersionKind()
 	if gvk.Empty() {
-		gvk = wellknown.XListenerSetGVK
+		gvk = wellknown.ListenerSetGVK
 	}
 	if r.ListenerSets[gvk] == nil {
 		r.ListenerSets[gvk] = make(map[types.NamespacedName]*ListenerSetReport)
@@ -156,7 +156,7 @@ func (r *ReportMap) route(obj metav1.Object) *RouteReport {
 		return r.HTTPRoutes[key]
 	case *gwv1a2.TCPRoute:
 		return r.TCPRoutes[key]
-	case *gwv1a2.TLSRoute:
+	case *gwv1.TLSRoute:
 		return r.TLSRoutes[key]
 	case *gwv1.GRPCRoute:
 		return r.GRPCRoutes[key]
@@ -178,7 +178,7 @@ func (r *ReportMap) newRouteReport(obj metav1.Object) *RouteReport {
 		r.HTTPRoutes[key] = rr
 	case *gwv1a2.TCPRoute:
 		r.TCPRoutes[key] = rr
-	case *gwv1a2.TLSRoute:
+	case *gwv1.TLSRoute:
 		r.TLSRoutes[key] = rr
 	case *gwv1.GRPCRoute:
 		r.GRPCRoutes[key] = rr
@@ -337,6 +337,8 @@ func getParentRefKey(parentRef *gwv1.ParentReference) ParentRefKey {
 	var group string
 	if parentRef.Group != nil {
 		group = string(*parentRef.Group)
+	} else {
+		group = canonicalGroup(parentRef.Kind)
 	}
 	var kind string
 	if parentRef.Kind != nil {
@@ -354,6 +356,13 @@ func getParentRefKey(parentRef *gwv1.ParentReference) ParentRefKey {
 			Name:      string(parentRef.Name),
 		},
 	}
+}
+
+func canonicalGroup(kind *gwv1.Kind) string {
+	if kind == nil {
+		return ""
+	}
+	return wellknown.KnownGvkByKind[string(*kind)].Group
 }
 
 // getParentRefOrNil returns a ParentRefReport for the given parentRef if and only if

@@ -18,8 +18,8 @@ import (
 
 // +genclient
 // +kubebuilder:object:root=true
-// +kubebuilder:metadata:labels={app=kgateway,app.kubernetes.io/name=kgateway}
-// +kubebuilder:resource:categories=kgateway,shortName=agpol
+// +kubebuilder:metadata:labels={app=agentgateway,app.kubernetes.io/name=agentgateway}
+// +kubebuilder:resource:categories=agentgateway,shortName=agpol
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels="gateway.networking.k8s.io/policy=Direct"
 type AgentgatewayPolicy struct {
@@ -53,17 +53,17 @@ type AgentgatewayPolicyList struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.backend) || !has(self.backend.ai) || ((!has(self.targetRefs) || !self.targetRefs.exists(t, t.kind == 'Service')) && (!has(self.targetSelectors) || !self.targetSelectors.exists(t, t.kind == 'Service')))",message="backend.ai may not be used with a Service target"
 // +kubebuilder:validation:XValidation:rule="has(self.frontend) && has(self.targetRefs) ? self.targetRefs.all(t, t.kind == 'Gateway' && !has(t.sectionName)) : true",message="the 'frontend' field can only target a Gateway"
 // +kubebuilder:validation:XValidation:rule="has(self.frontend) && has(self.targetSelectors) ? self.targetSelectors.all(t, t.kind == 'Gateway' && !has(t.sectionName)) : true",message="the 'frontend' field can only target a Gateway"
-// +kubebuilder:validation:XValidation:rule="has(self.traffic) && has(self.targetRefs) ? self.targetRefs.all(t, t.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute', 'XListenerSet']) : true",message="the 'traffic' field can only target a Gateway, XListenerSet, GRPCRoute, or HTTPRoute"
-// +kubebuilder:validation:XValidation:rule="has(self.traffic) && has(self.targetSelectors) ? self.targetSelectors.all(t, t.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute', 'XListenerSet']) : true",message="the 'traffic' field can only target a Gateway, XListenerSet, GRPCRoute, or HTTPRoute"
-// +kubebuilder:validation:XValidation:rule="has(self.targetRefs) && has(self.traffic) && has(self.traffic.phase) && self.traffic.phase == 'PreRouting' ? self.targetRefs.all(t, t.kind in ['Gateway', 'XListenerSet']) : true",message="the 'traffic.phase=PreRouting' field can only target a Gateway or XListenerSet"
-// +kubebuilder:validation:XValidation:rule="has(self.targetSelectors) && has(self.traffic) && has(self.traffic.phase) && self.traffic.phase == 'PreRouting' ? self.targetSelectors.all(t, t.kind in ['Gateway', 'XListenerSet']) : true",message="the 'traffic.phase=PreRouting' field can only target a Gateway or XListenerSet"
+// +kubebuilder:validation:XValidation:rule="has(self.traffic) && has(self.targetRefs) ? self.targetRefs.all(t, t.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute', 'ListenerSet']) : true",message="the 'traffic' field can only target a Gateway, ListenerSet, GRPCRoute, or HTTPRoute"
+// +kubebuilder:validation:XValidation:rule="has(self.traffic) && has(self.targetSelectors) ? self.targetSelectors.all(t, t.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute', 'ListenerSet']) : true",message="the 'traffic' field can only target a Gateway, ListenerSet, GRPCRoute, or HTTPRoute"
+// +kubebuilder:validation:XValidation:rule="has(self.targetRefs) && has(self.traffic) && has(self.traffic.phase) && self.traffic.phase == 'PreRouting' ? self.targetRefs.all(t, t.kind in ['Gateway', 'ListenerSet']) : true",message="the 'traffic.phase=PreRouting' field can only target a Gateway or ListenerSet"
+// +kubebuilder:validation:XValidation:rule="has(self.targetSelectors) && has(self.traffic) && has(self.traffic.phase) && self.traffic.phase == 'PreRouting' ? self.targetSelectors.all(t, t.kind in ['Gateway', 'ListenerSet']) : true",message="the 'traffic.phase=PreRouting' field can only target a Gateway or ListenerSet"
 type AgentgatewayPolicySpec struct {
 	// targetRefs specifies the target resources by reference to attach the policy to.
 	//
 	// +listType=atomic
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
-	// +kubebuilder:validation:XValidation:rule="self.all(r, (r.kind == 'Service' && r.group == '') || (r.kind == 'AgentgatewayBackend' && r.group == 'agentgateway.dev') || (r.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute'] && r.group == 'gateway.networking.k8s.io') || (r.kind == 'XListenerSet' && r.group == 'gateway.networking.x-k8s.io'))",message="targetRefs may only reference Gateway, HTTPRoute, GRPCRoute, XListenerSet, Service, or AgentgatewayBackend resources"
+	// +kubebuilder:validation:XValidation:rule="self.all(r, (r.kind == 'Service' && r.group == '') || (r.kind == 'AgentgatewayBackend' && r.group == 'agentgateway.dev') || (r.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute'] && r.group == 'gateway.networking.k8s.io') || (r.kind == 'ListenerSet' && r.group == 'gateway.networking.k8s.io'))",message="targetRefs may only reference Gateway, HTTPRoute, GRPCRoute, ListenerSet, Service, or AgentgatewayBackend resources"
 	// +kubebuilder:validation:XValidation:message="Only one Kind of targetRef can be set on one policy",rule="self.all(l1, !self.exists(l2, l1.kind != l2.kind))"
 	// +optional
 	TargetRefs []shared.LocalPolicyTargetReferenceWithSectionName `json:"targetRefs,omitempty"`
@@ -71,7 +71,7 @@ type AgentgatewayPolicySpec struct {
 	// targetSelectors specifies the target selectors to select resources to attach the policy to.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
-	// +kubebuilder:validation:XValidation:rule="self.all(r, (r.kind == 'Service' && r.group == '') || (r.kind == 'AgentgatewayBackend' && r.group == 'agentgateway.dev') || (r.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute'] && r.group == 'gateway.networking.k8s.io') || (r.kind == 'XListenerSet' && r.group == 'gateway.networking.x-k8s.io'))",message="targetRefs may only reference Gateway, HTTPRoute, GRPCRoute, XListenerSet, Service, or AgentgatewayBackend resources"
+	// +kubebuilder:validation:XValidation:rule="self.all(r, (r.kind == 'Service' && r.group == '') || (r.kind == 'AgentgatewayBackend' && r.group == 'agentgateway.dev') || (r.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute'] && r.group == 'gateway.networking.k8s.io') || (r.kind == 'ListenerSet' && r.group == 'gateway.networking.k8s.io'))",message="targetRefs may only reference Gateway, HTTPRoute, GRPCRoute, ListenerSet, Service, or AgentgatewayBackend resources"
 	// +kubebuilder:validation:XValidation:message="Only one Kind of targetRef can be set on one policy",rule="self.all(l1, !self.exists(l2, l1.kind != l2.kind))"
 	// +optional
 	TargetSelectors []shared.LocalPolicyTargetSelectorWithSectionName `json:"targetSelectors,omitempty"`
@@ -129,12 +129,86 @@ type BackendSimple struct {
 	// +optional
 	HTTP *BackendHTTP `json:"http,omitempty"`
 
+	// tunnel defines settings for managing tunnel connections (like HTTPS_PROXY) to the backend.
+	// +optional
+	Tunnel *BackendTunnel `json:"tunnel,omitempty"`
+
+	// transformation is used to mutate and transform requests and responses sent to and from the backend.
+	// +optional
+	Transformation *Transformation `json:"transformation,omitempty"`
+
 	// auth defines settings for managing authentication to the backend
 	// +optional
 	Auth *BackendAuth `json:"auth,omitempty"`
+
+	// health defines settings for passive and active health checking.
+	// +optional
+	Health *Health `json:"health,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;mcp
+type Health struct {
+	// UnhealthyCondition is a CEL expression that determines whether a response indicates an unhealthy backend.
+	// When the expression evaluates to true, the backend is considered unhealthy and may be evicted.
+	//
+	// For example, to evict on 5xx responses: `response.code >= 500`.
+	//
+	// When unset, any 5xx response, or a connection failure, is treated as unhealthy.
+	// This default lowers the backend's health score but does not trigger eviction on its own.
+	//
+	// +optional
+	UnhealthyCondition *shared.CELExpression `json:"unhealthyCondition,omitempty"`
+
+	// Eviction defines settings for evicting unhealthy backends.
+	// +optional
+	Eviction *BackendEviction `json:"eviction,omitempty"`
+}
+
+// BackendEviction defines settings for evicting unhealthy backends.
+type BackendEviction struct {
+	// Duration specifies the base time a backend should be evicted after being marked unhealthy.
+	// Subsequent evictions use multiplicative backoff (duration * times_evicted).
+	// If all endpoints are evicted, the load balancer falls back to returning evicted endpoints
+	// rather than failing entirely.
+	// If unset, defaults to 3s.
+	// +kubebuilder:validation:XValidation:rule="matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')",message="invalid duration value"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="evictionDuration must be at least 1 second"
+	// +kubebuilder:default="3s"
+	// +optional
+	Duration *metav1.Duration `json:"duration,omitempty"`
+
+	// RestoreHealth is the health score (0–100) assigned to a backend when it returns from eviction.
+	// For gradual recovery, set below 100; for full recovery immediately, set 100.
+	// If unset, the backend resumes with the health it had when evicted.
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	RestoreHealth *int32 `json:"restoreHealth,omitempty"`
+
+	// ConsecutiveFailures is the number of consecutive unhealthy responses required before the backend is evicted.
+	// For example, a value of 5 means the backend must receive 5 unhealthy responses in a row before being evicted.
+	// When both consecutiveFailures and healthThreshold are set, the backend is evicted when either condition is met.
+	// When neither is set, a single unhealthy response can trigger eviction.
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ConsecutiveFailures *int32 `json:"consecutiveFailures,omitempty"`
+
+	// HealthThreshold is the EWMA (exponentially-weighted moving average) health score threshold, expressed as 0–100.
+	// When set, a backend is only evicted if its computed health drops below this value after an unhealthy response.
+	// For example, 50 means the backend is evicted when its EWMA health falls below 50% following failures.
+	// Unlike consecutiveFailures (which counts consecutive failures), this uses a sliding-window average
+	// so a single success in a stream of failures can delay eviction.
+	// When both consecutiveFailures and healthThreshold are set, the backend is evicted when either condition is met.
+	// When neither is set, a single unhealthy response triggers eviction.
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	HealthThreshold *int32 `json:"healthThreshold,omitempty"`
+}
+
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendWithMCP struct {
 	BackendSimple `json:",inline"`
 
@@ -143,7 +217,7 @@ type BackendWithMCP struct {
 	MCP *BackendMCP `json:"mcp,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;ai
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendWithAI struct {
 	BackendSimple `json:",inline"`
 
@@ -152,7 +226,7 @@ type BackendWithAI struct {
 	AI *BackendAI `json:"ai,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=tcp;tls;http;auth;mcp;ai
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendFull struct {
 	BackendSimple `json:",inline"`
 
@@ -251,6 +325,7 @@ type BackendTLS struct {
 	AlpnProtocols *[]TinyString `json:"alpnProtocols,omitempty"`
 }
 
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Frontend struct {
 	// tcp defines settings on managing incoming TCP connections.
 	// +optional
@@ -271,7 +346,7 @@ type Frontend struct {
 	Tracing *Tracing `json:"tracing,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=maxBufferSize;http1MaxHeaders;http1IdleTimeout;http2WindowSize;http2ConnectionWindowSize;http2FrameSize;http2KeepaliveInterval;http2KeepaliveTimeout
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendHTTP struct {
 	// maxBufferSize defines the maximum size HTTP body that will be buffered into memory.
 	// Bodies will only be buffered for policies which require buffering.
@@ -317,7 +392,7 @@ type FrontendHTTP struct {
 	HTTP2KeepaliveTimeout *metav1.Duration `json:"http2KeepaliveTimeout,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=handshakeTimeout
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendTLS struct {
 	// handshakeTimeout specifies the deadline for a TLS handshake to complete.
 	// If unset, this defaults to 15s.
@@ -380,7 +455,7 @@ const (
 	CipherSuiteTLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 CipherSuite = "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
 )
 
-// +kubebuilder:validation:AtLeastOneOf=keepalive
+// +kubebuilder:validation:AtLeastOneFieldSet
 type FrontendTCP struct {
 	// keepalive defines settings for enabling TCP keepalives on the connection.
 	// +optional
@@ -419,7 +494,7 @@ const (
 	PolicyPhasePostRouting PolicyPhase = "PostRouting"
 )
 
-// +kubebuilder:validation:XValidation:rule="has(self.phase) && self.phase == 'PreRouting' ? !has(self.rateLimit) && !has(self.cors) && !has(self.csrf) && !has(self.headerModifiers) && !has(self.hostRewrite) && !has(self.timeouts) && !has(self.retry) && !has(self.authorization): true",message="phase PreRouting only supports extAuth, transformation, extProc, jwtAuthentication, basicAuthentication, and apiKeyAuthentication"
+// +kubebuilder:validation:IfThenOnlyFields:if="has(self.phase) && self.phase == 'PreRouting'",fields=phase;transformation;extProc;extAuth;jwtAuthentication;basicAuthentication;apiKeyAuthentication,message="phase PreRouting only supports extAuth, transformation, extProc, jwtAuthentication, basicAuthentication, and apiKeyAuthentication"
 type Traffic struct {
 	// The phase to apply the traffic policy to. If the phase is PreRouting, the targetRef must be a Gateway or a Listener.
 	// PreRouting is typically used only when a policy needs to influence the routing decision.
@@ -473,7 +548,6 @@ type Traffic struct {
 	// hostRewrite specifies how to rewrite the Host header for requests.
 	//
 	// If the HTTPRoute `urlRewrite` filter already specifies a host rewrite, this setting is ignored.
-	// +kubebuilder:validation:Enum=Auto;None
 	// +optional
 	HostnameRewrite *HostnameRewrite `json:"hostRewrite,omitempty"`
 
@@ -748,7 +822,7 @@ const (
 	HostnameRewriteModeNone HostnameRewriteMode = "None"
 )
 
-// +kubebuilder:validation:ExactlyOneOf=key;secretRef;passthrough;aws;gcp
+// +kubebuilder:validation:ExactlyOneOf=key;secretRef;passthrough;aws;azure;gcp
 type BackendAuth struct {
 	// key provides an inline key to use as the value of the Authorization header.
 	// This option is the least secure; usage of a Secret is preferred.
@@ -774,6 +848,11 @@ type BackendAuth struct {
 	//
 	// +optional
 	AWS *AwsAuth `json:"aws,omitempty"`
+
+	// Azure specifies an Azure authentication method for the backend.
+	//
+	// +optional
+	Azure *AzureAuth `json:"azure,omitempty"`
 
 	// Auth specifies to use a Google  authentication method for the backend.
 	// When omitted, we will try to use the default AWS SDK authentication methods.
@@ -813,10 +892,32 @@ type AwsAuth struct {
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
 }
 
+type AzureAuth struct {
+	// SecretRef references a Kubernetes Secret containing the Azure credentials.
+	// The Secret must have keys "clientId", "tenantId", and "clientSecret".
+	//
+	// +optional
+	SecretRef corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Details for managed identity authentication
+	//
+	// +optional
+	ManagedIdentity *AzureManagedIdentity `json:"managedIdentity,omitempty"`
+}
+
+type AzureManagedIdentity struct {
+	// +required
+	ClientID string `json:"clientId"`
+	// +required
+	ObjectID string `json:"objectId"`
+	// +required
+	ResourceID string `json:"resourceId"`
+}
+
 type BackendAuthPassthrough struct {
 }
 
-// +kubebuilder:validation:AtLeastOneOf=prompt;promptGuard;defaults;overrides;modelAliases;promptCaching;routes
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendAI struct {
 	// Enrich requests sent to the LLM provider by appending and prepending system prompts. This can be configured only for
 	// LLM providers that use the `CHAT` or `CHAT_STREAMING` API route type.
@@ -837,6 +938,13 @@ type BackendAI struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	Overrides []FieldDefault `json:"overrides,omitempty"`
+	// Provide CEL transformations to compute and set fields in the request body.
+	// The expression result overwrites any existing value for that field.
+	// This has a higher priority than 'overrides' if both are set for the same key.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	Transformations []FieldTransformation `json:"transformations,omitempty"`
 
 	// ModelAliases maps friendly model names to actual provider model names.
 	// Example: {"fast": "gpt-3.5-turbo", "smart": "gpt-4-turbo"}
@@ -861,7 +969,7 @@ type BackendAI struct {
 
 // RouteType specifies how the AI gateway should process incoming requests
 // based on the URL path and the API format expected.
-// +kubebuilder:validation:Enum=Completions;Messages;Models;Passthrough;Responses;AnthropicTokenCount;Embeddings
+// +kubebuilder:validation:Enum=Completions;Messages;Models;Passthrough;Detect;Responses;AnthropicTokenCount;Embeddings;Realtime
 type RouteType string
 
 const (
@@ -877,6 +985,9 @@ const (
 	// RouteTypePassthrough sends requests to upstream as-is without LLM processing
 	RouteTypePassthrough RouteType = "Passthrough"
 
+	// RouteTypeDetect sends requests as-is but attempts to extract request/response metadata for telemetry/rate limiting
+	RouteTypeDetect RouteType = "Detect"
+
 	// RouteTypeResponses processes OpenAI /v1/responses format requests
 	RouteTypeResponses RouteType = "Responses"
 
@@ -886,11 +997,11 @@ const (
 	// RouteTypeEmbeddings processes OpenAI /v1/embeddings format requests
 	RouteTypeEmbeddings RouteType = "Embeddings"
 
-	//RouteTypeRealtime processes OpenAI /v1/realtime requests
+	// RouteTypeRealtime processes OpenAI /v1/realtime requests
 	RouteTypeRealtime RouteType = "Realtime"
 )
 
-// +kubebuilder:validation:AtLeastOneOf=authorization;authentication
+// +kubebuilder:validation:AtLeastOneFieldSet
 type BackendMCP struct {
 	// authorization defines MCPBackend level authorization. Unlike authorization at the HTTP level, which will reject
 	// unauthorized requests with a 403 error, this policy works at the MCPBackend level.
@@ -931,6 +1042,7 @@ type MCPAuthentication struct {
 	JWKS RemoteJWKS `json:"jwks"`
 
 	// validation mode for JWT authentication.
+	// +kubebuilder:default=Strict
 	// +optional
 	Mode JWTAuthenticationMode `json:"mode,omitempty"`
 }
@@ -941,6 +1053,13 @@ const (
 	Auth0    McpIDP = "Auth0"
 	Keycloak McpIDP = "Keycloak"
 )
+
+type BackendTunnel struct {
+	// backendRef references the proxy server to reach.
+	// Supported types: Service and Backend.
+	// +required
+	BackendRef gwv1.BackendObjectReference `json:"backendRef"`
+}
 
 type BackendHTTP struct {
 	// version specifies the HTTP protocol version to use when connecting to the backend.
@@ -979,7 +1098,7 @@ type BackendTCP struct {
 	ConnectTimeout *metav1.Duration `json:"connectTimeout,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=request;response
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Transformation struct {
 	// request is used to modify the request path.
 	// +optional
@@ -990,7 +1109,7 @@ type Transformation struct {
 	Response *Transform `json:"response,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=set;add;remove;body
+// +kubebuilder:validation:AtLeastOneFieldSet
 type Transform struct {
 	// set is a list of headers and the value they should be set to.
 	//
@@ -1022,6 +1141,14 @@ type Transform struct {
 	// body controls manipulation of the HTTP body.
 	// +optional
 	Body *shared.CELExpression `json:"body,omitempty"`
+
+	// metadata stores CEL-evaluated values under the `metadata` CEL variable for subsequent policy evaluations.
+	// metadata is evaluated before header or body transformations.
+	//
+	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=16
+	// +optional
+	Metadata map[string]shared.CELExpression `json:"metadata,omitempty"`
 }
 
 // An HTTP Header Name.
@@ -1142,7 +1269,7 @@ type ExtAuthBody struct {
 	MaxSize int32 `json:"maxSize"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=local;global
+// +kubebuilder:validation:AtLeastOneFieldSet
 type RateLimits struct {
 	// Local defines a local rate limiting policy.
 	// +kubebuilder:validation:MinItems=1
@@ -1204,7 +1331,7 @@ type RateLimitDescriptorEntry struct {
 	//
 	// For example, to rate limit based on the Client IP: `source.address`.
 	//
-	// See https://agentgateway.dev/docs/reference/cel/ for more info.
+	// See https://agentgateway.dev/docs/standalone/latest/reference/cel/ for more info.
 	// +required
 	Expression shared.CELExpression `json:"expression"`
 }
@@ -1272,6 +1399,7 @@ type HostnameRewrite struct {
 	//
 	// This setting defaults to Auto when connecting to hostname-based Backend types, and None otherwise (for Service or
 	// IP-based Backends).
+	// +kubebuilder:validation:Enum=Auto;None
 	// +required
 	Mode HostnameRewriteMode `json:"mode"`
 }
@@ -1300,9 +1428,35 @@ type AccessLog struct {
 	// attributes specifies customizations to the key-value pairs that are logged
 	// +optional
 	Attributes *LogTracingAttributes `json:"attributes,omitempty"`
+
+	// otlp configures OTLP access log export to an OpenTelemetry-compatible backend.
+	// +optional
+	Otlp *OtlpAccessLog `json:"otlp,omitempty"`
 }
 
-// +kubebuilder:validation:AtLeastOneOf=remove;add
+// OtlpAccessLog defines configuration for shipping access logs to an
+// OpenTelemetry-compatible backend via OTLP.
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || !has(self.protocol) || self.protocol == 'HTTP'",message="path is only valid with protocol HTTP"
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || self.path.startsWith('/')",message="path must start with /"
+type OtlpAccessLog struct {
+	// backendRef references the OTLP server to send access logs to.
+	// Supported types: Service and AgentgatewayBackend.
+	// +required
+	BackendRef gwv1.BackendObjectReference `json:"backendRef"`
+
+	// protocol specifies the OTLP protocol variant to use.
+	// +kubebuilder:default=GRPC
+	// +kubebuilder:validation:Enum=HTTP;GRPC
+	// +optional
+	Protocol OTLPProtocol `json:"protocol,omitempty"`
+
+	// path specifies the OTLP/HTTP path to use. This is only applicable when protocol is HTTP.
+	// If unset, this defaults to /v1/logs.
+	// +optional
+	Path *LongString `json:"path,omitempty"`
+}
+
+// +kubebuilder:validation:AtLeastOneFieldSet
 type LogTracingAttributes struct {
 	// remove lists the default fields that should be removed. For example, "http.method".
 	// +kubebuilder:validation:MinItems=1
@@ -1324,23 +1478,30 @@ type AttributeAdd struct {
 	Expression shared.CELExpression `json:"expression"`
 }
 
-type TracingProtocol string
+type OTLPProtocol string
 
 const (
-	TracingProtocolHttp TracingProtocol = "HTTP"
-	TracingProtocolGrpc TracingProtocol = "GRPC"
+	OTLPProtocolHttp OTLPProtocol = "HTTP"
+	OTLPProtocolGrpc OTLPProtocol = "GRPC"
 )
 
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || !has(self.protocol) || self.protocol == 'HTTP'",message="path is only valid with protocol HTTP"
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || self.path.startsWith('/')",message="path must start with /"
 type Tracing struct {
 	// backendRef references the OTLP server to reach.
 	// Supported types: Service and AgentgatewayBackend.
 	// +required
 	BackendRef gwv1.BackendObjectReference `json:"backendRef"`
 	// protocol specifies the OTLP protocol variant to use.
-	// +kubebuilder:default=HTTP
+	// +kubebuilder:default=GRPC
 	// +kubebuilder:validation:Enum=HTTP;GRPC
 	// +optional
-	Protocol TracingProtocol `json:"protocol,omitempty"`
+	Protocol OTLPProtocol `json:"protocol,omitempty"`
+
+	// path specifies the OTLP path to use. This is only applicable when protocol is HTTP.
+	// If unset, this defaults to /v1/traces.
+	// +optional
+	Path *LongString `json:"path,omitempty"`
 
 	// attributes specify customizations to the key-value pairs that are included in the trace.
 	// +optional

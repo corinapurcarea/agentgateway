@@ -13,8 +13,8 @@ import (
 
 // +genclient
 // +kubebuilder:object:root=true
-// +kubebuilder:metadata:labels={app=kgateway,app.kubernetes.io/name=kgateway}
-// +kubebuilder:resource:categories=kgateway,shortName=agbe
+// +kubebuilder:metadata:labels={app=agentgateway,app.kubernetes.io/name=agentgateway}
+// +kubebuilder:resource:categories=agentgateway,shortName=agbe
 // +kubebuilder:subresource:status
 type AgentgatewayBackend struct {
 	metav1.TypeMeta `json:",inline"`
@@ -51,7 +51,7 @@ type AgentgatewayBackendList struct {
 	Items           []AgentgatewayBackend `json:"items"`
 }
 
-// +kubebuilder:validation:ExactlyOneOf=ai;static;dynamicForwardProxy;mcp
+// +kubebuilder:validation:ExactlyOneOf=ai;static;dynamicForwardProxy;mcp;aws
 // +kubebuilder:validation:XValidation:rule="has(self.policies) && has(self.policies.ai) ? has(self.ai) : true",message="AI policies require AI backend"
 // +kubebuilder:validation:XValidation:rule="has(self.policies) && has(self.policies.mcp) ? has(self.mcp) : true",message="MCP policies require MCP backend"
 type AgentgatewayBackendSpec struct {
@@ -75,6 +75,10 @@ type AgentgatewayBackendSpec struct {
 	// +optional
 	DynamicForwardProxy *DynamicForwardProxyBackend `json:"dynamicForwardProxy,omitempty"`
 
+	// aws represents an AWS service backend (AgentCore, etc.).
+	// +optional
+	Aws *AwsBackend `json:"aws,omitempty"`
+
 	// policies controls policies for communicating with this backend. Policies may also be set in AgentgatewayPolicy;
 	// policies are merged on a field-level basis, with policies on the Backend (this field) taking precedence.
 	// +optional
@@ -82,6 +86,24 @@ type AgentgatewayBackendSpec struct {
 }
 
 type DynamicForwardProxyBackend struct {
+}
+
+// AwsBackend configures an AWS service backend.
+// +kubebuilder:validation:ExactlyOneOf=agentCore
+type AwsBackend struct {
+	// agentCore configures Amazon Bedrock AgentCore as a backend.
+	// +optional
+	AgentCore *AwsAgentCoreBackend `json:"agentCore,omitempty"`
+}
+
+// AwsAgentCoreBackend configures Amazon Bedrock AgentCore.
+type AwsAgentCoreBackend struct {
+	// agentRuntimeArn is the ARN of the AgentCore runtime.
+	// +required
+	AgentRuntimeArn string `json:"agentRuntimeArn"`
+	// qualifier optionally specifies the alias or version qualifier.
+	// +optional
+	Qualifier *string `json:"qualifier,omitempty"`
 }
 
 type StaticBackend struct {
@@ -126,7 +148,7 @@ type AIBackend struct {
 	//            name: azure-secret
 	// ```
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:MaxItems=8
 	// +optional
 	// TODO: enable this rule when we don't need to support older k8s versions where this rule breaks // +kubebuilder:validation:XValidation:message="provider names must be unique across groups",rule="self.map(pg, pg.providers.map(pp, pp.name)).map(p, self.map(pg, pg.providers.map(pp, pp.name)).filter(cp, cp != p).exists(cp, p.exists(pn, pn in cp))).exists(p, !p)"
 	PriorityGroups []PriorityGroup `json:"groups,omitempty"`
@@ -137,7 +159,7 @@ type PriorityGroup struct {
 	// with automatic weighting based on health.
 	//
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:XValidation:message="provider names must be unique within a group",rule="self.all(p1, self.exists_one(p2, p1.name == p2.name))"
 	// +required
 	Providers []NamedLLMProvider `json:"providers"`
@@ -204,7 +226,7 @@ type LLMProvider struct {
 	Path LongString `json:"path,omitempty"`
 }
 
-// OpenAIConfig settings for the [OpenAI](https://platform.openai.com/docs/api-reference/streaming) LLM provider.
+// OpenAIConfig settings for the [OpenAI](https://developers.openai.com/api/docs/guides/streaming-responses) LLM provider.
 type OpenAIConfig struct {
 	// Optional: Override the model name, such as `gpt-4o-mini`.
 	// If unset, the model name is taken from the request.
@@ -212,7 +234,7 @@ type OpenAIConfig struct {
 	Model *ShortString `json:"model,omitempty"`
 }
 
-// AzureOpenAIConfig settings for the [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/) LLM provider.
+// AzureOpenAIConfig settings for the [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-foundry/?view=foundry-classic) LLM provider.
 // +kubebuilder:validation:XValidation:message="deploymentName is required for this apiVersion",rule="!has(self.apiVersion) || self.apiVersion == 'v1' ? true : has(self.deploymentName)"
 type AzureOpenAIConfig struct {
 	// The endpoint for the Azure OpenAI API to use, such as `my-endpoint.openai.azure.com`.
@@ -221,13 +243,13 @@ type AzureOpenAIConfig struct {
 	Endpoint ShortString `json:"endpoint"`
 
 	// The name of the Azure OpenAI model deployment to use.
-	// For more information, see the [Azure OpenAI model docs](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models).
+	// For more information, see the [Azure OpenAI model docs](https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/models-sold-directly-by-azure?view=foundry-classic).
 	// This is required if ApiVersion is not 'v1'. For v1, the model can be set in the request.
 	// +optional
 	DeploymentName *ShortString `json:"deploymentName,omitempty"`
 
 	// The version of the Azure OpenAI API to use.
-	// For more information, see the [Azure OpenAI API version reference](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs).
+	// For more information, see the [Azure OpenAI API version reference](https://learn.microsoft.com/en-us/azure/ai-foundry/?view=foundry-classicreference#api-specs).
 	// If unset, defaults to "v1"
 	// +optional
 	ApiVersion *TinyString `json:"apiVersion,omitempty"`
@@ -241,7 +263,7 @@ type GeminiConfig struct {
 	Model *ShortString `json:"model,omitempty"`
 }
 
-// VertexAIConfig settings for the [Vertex AI](https://cloud.google.com/vertex-ai/docs) LLM provider.
+// VertexAIConfig settings for the [Vertex AI](https://docs.cloud.google.com/vertex-ai/docs) LLM provider.
 type VertexAIConfig struct {
 	// Optional: Override the model name, such as `gpt-4o-mini`.
 	// If unset, the model name is taken from the request.
@@ -257,7 +279,7 @@ type VertexAIConfig struct {
 	Region TinyString `json:"region"`
 }
 
-// AnthropicConfig settings for the [Anthropic](https://docs.anthropic.com/en/release-notes/api) LLM provider.
+// AnthropicConfig settings for the [Anthropic](https://platform.claude.com/docs/en/release-notes/overview) LLM provider.
 type AnthropicConfig struct {
 	// Optional: Override the model name, such as `gpt-4o-mini`.
 	// If unset, the model name is taken from the request.
@@ -343,7 +365,7 @@ const (
 // +kubebuilder:validation:Enum=Stateful;Stateless
 type SessionRouting string
 
-// +kubebuilder:validation:AtLeastOneOf=namespaces;services
+// +kubebuilder:validation:AtLeastOneFieldSet
 type McpSelector struct {
 	// namespace is the label selector in which namespaces Services should be selected from.
 	// If unset, only the namespace of the AgentgatewayBackend is searched.

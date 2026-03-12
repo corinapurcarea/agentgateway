@@ -11,7 +11,7 @@ use llm::{AIBackend, AIProvider, NamedAIProvider};
 use super::agent::*;
 use crate::http::auth::{AwsAuth, BackendAuth, GcpAuth};
 use crate::http::transformation_cel::{LocalTransform, LocalTransformationConfig, Transformation};
-use crate::http::{HeaderOrPseudo, Scheme, auth, authorization};
+use crate::http::{HeaderOrPseudo, Scheme, auth, authorization, health};
 use crate::mcp::McpAuthorization;
 use crate::telemetry::log::OrderedStringMap;
 use crate::types::discovery::NamespacedHostname;
@@ -102,6 +102,9 @@ impl From<&proto::agent::TlsConfig> for ServerTLSConfig {
 			}
 		};
 
+		let mtls_mode =
+			proto::agent::tls_config::MtlsMode::try_from(value.mtls_mode).unwrap_or_default();
+
 		match ServerTLSConfig::from_pem_with_profile(
 			value.cert.clone(),
 			value.private_key.clone(),
@@ -110,6 +113,7 @@ impl From<&proto::agent::TlsConfig> for ServerTLSConfig {
 			min_version,
 			max_version,
 			cipher_suites,
+			mtls_mode == proto::agent::tls_config::MtlsMode::AllowInsecureFallback,
 		) {
 			Ok(sc) => sc,
 			Err(e) => {
@@ -120,6 +124,12 @@ impl From<&proto::agent::TlsConfig> for ServerTLSConfig {
 	}
 }
 
+fn expand_backend_policy_spec(
+	spec: &proto::agent::BackendPolicySpec,
+) -> Result<Vec<BackendPolicy>, ProtoError> {
+	BackendPolicy::try_from(spec).map(|p| vec![p])
+}
+
 impl TryFrom<&proto::agent::RouteBackend> for RouteBackendReference {
 	type Error = ProtoError;
 
@@ -128,8 +138,11 @@ impl TryFrom<&proto::agent::RouteBackend> for RouteBackendReference {
 		let inline_policies = s
 			.backend_policies
 			.iter()
-			.map(BackendPolicy::try_from)
-			.collect::<Result<Vec<_>, _>>()?;
+			.map(expand_backend_policy_spec)
+			.collect::<Result<Vec<_>, _>>()?
+			.into_iter()
+			.flatten()
+			.collect();
 		Ok(Self {
 			weight: s.weight as usize,
 			backend,
@@ -199,28 +212,36 @@ impl TryFrom<&proto::agent::backend_policy_spec::McpAuthentication> for McpAuthe
 		})?;
 
 		let audiences = (!m.audiences.is_empty()).then(|| m.audiences.clone());
-		let jwt_provider = http::jwt::Provider::from_jwks(jwk_set, m.issuer.clone(), audiences)
-			.map_err(|e| {
-				ProtoError::Generic(format!(
-					"failed to create JWT provider for MCP Authentication: {e}"
-				))
-			})?;
+		let jwt_validation_options = m
+			.jwt_validation_options
+			.as_ref()
+			.map(|vo| http::jwt::JWTValidationOptions {
+				required_claims: vo.required_claims.iter().cloned().collect(),
+			})
+			.unwrap_or_default();
+		let jwt_provider =
+			http::jwt::Provider::from_jwks(jwk_set, m.issuer.clone(), audiences, jwt_validation_options)
+				.map_err(|e| {
+					ProtoError::Generic(format!(
+						"failed to create JWT provider for MCP Authentication: {e}"
+					))
+				})?;
 
 		let mode = match proto::agent::backend_policy_spec::mcp_authentication::Mode::try_from(m.mode)
 			.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
 		{
 			proto::agent::backend_policy_spec::mcp_authentication::Mode::Optional => {
-				http::jwt::Mode::Optional
+				McpAuthenticationMode::Optional
 			},
 			proto::agent::backend_policy_spec::mcp_authentication::Mode::Strict => {
-				http::jwt::Mode::Strict
+				McpAuthenticationMode::Strict
 			},
 			proto::agent::backend_policy_spec::mcp_authentication::Mode::Permissive => {
-				http::jwt::Mode::Permissive
+				McpAuthenticationMode::Permissive
 			},
 		};
 
-		let jwt_validator = http::jwt::Jwt::from_providers(vec![jwt_provider], mode);
+		let jwt_validator = http::jwt::Jwt::from_providers(vec![jwt_provider], mode.into());
 		Ok(McpAuthentication {
 			issuer: m.issuer.clone(),
 			audiences: m.audiences.clone(),
@@ -255,6 +276,7 @@ fn convert_route_type(proto_rt: i32) -> llm::RouteType {
 		Ok(ProtoRT::Messages) => llm::RouteType::Messages,
 		Ok(ProtoRT::Models) => llm::RouteType::Models,
 		Ok(ProtoRT::Passthrough) => llm::RouteType::Passthrough,
+		Ok(ProtoRT::Detect) => llm::RouteType::Detect,
 		Ok(ProtoRT::Responses) => llm::RouteType::Responses,
 		Ok(ProtoRT::AnthropicTokenCount) => llm::RouteType::AnthropicTokenCount,
 		Ok(ProtoRT::Embeddings) => llm::RouteType::Embeddings,
@@ -411,6 +433,19 @@ fn convert_backend_ai_policy(
 				.map(|(k, v)| serde_json::from_str(v).map(|v| (k.clone(), v)))
 				.collect::<Result<_, _>>()?,
 		),
+		transformations: if ai.transformations.is_empty() {
+			None
+		} else {
+			Some(
+				ai.transformations
+					.iter()
+					.map(|(k, v)| {
+						let ve = cel::Expression::new_permissive(v);
+						Ok::<_, ProtoError>((k.to_owned(), Arc::new(ve)))
+					})
+					.collect::<Result<_, _>>()?,
+			)
+		},
 		prompts: ai.prompts.as_ref().map(convert_prompt_enrichment),
 		model_aliases: ai
 			.model_aliases
@@ -665,8 +700,11 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 		let pols = s
 			.inline_policies
 			.iter()
-			.map(BackendPolicy::try_from)
-			.collect::<Result<Vec<_>, _>>()?;
+			.map(expand_backend_policy_spec)
+			.collect::<Result<Vec<_>, _>>()?
+			.into_iter()
+			.flatten()
+			.collect::<Vec<_>>();
 		let name = s.name.as_ref().ok_or(ProtoError::MissingRequiredField)?;
 		let backend = match &s.kind {
 			Some(proto::agent::backend::Kind::Static(s)) => Backend::Opaque(
@@ -675,6 +713,26 @@ impl TryFrom<&proto::agent::Backend> for BackendWithPolicies {
 					.map_err(|e| ProtoError::Generic(e.to_string()))?,
 			),
 			Some(proto::agent::backend::Kind::Dynamic(_)) => Backend::Dynamic(name.into(), ()),
+			Some(proto::agent::backend::Kind::Aws(a)) => {
+				let aws_config = match &a.service {
+					Some(proto::agent::aws_backend::Service::AgentCore(ac)) => {
+						let agentcore_cfg = crate::agentcore::AgentCoreConfig::new(
+							ac.agent_runtime_arn.clone(),
+							ac.qualifier.clone(),
+						)
+						.map_err(|e| ProtoError::Generic(e.to_string()))?;
+						crate::aws::AwsBackendConfig {
+							service: crate::aws::AwsService::AgentCore(agentcore_cfg),
+						}
+					},
+					None => {
+						return Err(ProtoError::Generic(
+							"AwsBackend: missing service".to_string(),
+						));
+					},
+				};
+				Backend::Aws(name.into(), aws_config)
+			},
 			Some(proto::agent::backend::Kind::Ai(a)) => {
 				if a.provider_groups.is_empty() {
 					return Err(ProtoError::Generic(
@@ -933,6 +991,7 @@ impl TryFrom<&proto::agent::traffic_policy_spec::TransformationPolicy> for Trans
 			let mut set = Vec::new();
 			let mut remove = Vec::new();
 			let mut body = None;
+			let mut metadata = Vec::new();
 
 			if let Some(t) = t {
 				for h in &t.add {
@@ -947,6 +1006,9 @@ impl TryFrom<&proto::agent::traffic_policy_spec::TransformationPolicy> for Trans
 				if let Some(b) = &t.body {
 					body = Some(b.expression.clone().into());
 				}
+				for (k, v) in &t.metadata {
+					metadata.push((k.clone().into(), v.clone().into()));
+				}
 			}
 
 			Ok(LocalTransform {
@@ -954,6 +1016,7 @@ impl TryFrom<&proto::agent::traffic_policy_spec::TransformationPolicy> for Trans
 				set,
 				remove,
 				body,
+				metadata,
 			})
 		}
 
@@ -1006,6 +1069,9 @@ impl TryFrom<&proto::agent::BackendPolicySpec> for BackendPolicy {
 					.transpose()?
 					.unwrap_or_default(),
 			}),
+			Some(bps::Kind::BackendTunnel(bt)) => BackendPolicy::Tunnel(backend::Tunnel {
+				proxy: Arc::new(resolve_simple_reference(bt.proxy.as_ref())?),
+			}),
 			Some(bps::Kind::BackendTls(btls)) => {
 				let mode = bps::backend_tls::VerificationMode::try_from(btls.verification)?;
 				let tls = http::backendtls::ResolvedBackendTLS {
@@ -1036,6 +1102,9 @@ impl TryFrom<&proto::agent::BackendPolicySpec> for BackendPolicy {
 				BackendPolicy::McpAuthentication(McpAuthentication::try_from(ma)?)
 			},
 			Some(bps::Kind::Ai(ai)) => BackendPolicy::AI(Arc::new(convert_backend_ai_policy(ai)?)),
+			Some(bps::Kind::Transformation(tp)) => {
+				BackendPolicy::Transformation(Transformation::try_from(tp)?)
+			},
 			Some(bps::Kind::RequestHeaderModifier(rhm)) => {
 				BackendPolicy::RequestHeaderModifier(http::filters::HeaderModifier {
 					add: rhm
@@ -1105,9 +1174,32 @@ impl TryFrom<&proto::agent::BackendPolicySpec> for BackendPolicy {
 					.collect::<Result<Vec<_>, _>>()?;
 				BackendPolicy::RequestMirror(mirrors)
 			},
+			Some(bps::Kind::Health(h)) => BackendPolicy::Health(convert_health(h)?),
 			None => return Err(ProtoError::MissingRequiredField),
 		})
 	}
+}
+
+fn convert_health(
+	h: &proto::agent::backend_policy_spec::Health,
+) -> Result<health::Policy, ProtoError> {
+	let unhealthy_expression = if h.unhealthy_condition.is_empty() {
+		None
+	} else {
+		Some(Arc::new(cel::Expression::new_permissive(
+			&h.unhealthy_condition,
+		)))
+	};
+	let eviction = h.eviction.as_ref().map(|ev| health::Eviction {
+		duration: ev.duration.map(convert_duration),
+		restore_health: ev.restore_health,
+		consecutive_failures: ev.consecutive_failures,
+		health_threshold: ev.health_threshold,
+	});
+	Ok(health::Policy {
+		unhealthy_expression,
+		eviction,
+	})
 }
 
 impl TryFrom<&proto::agent::TrafficPolicySpec> for PhasedTrafficPolicy {
@@ -1194,7 +1286,6 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 							allow_partial_message: body_opts.allow_partial_message,
 							pack_as_bytes: body_opts.pack_as_bytes,
 						});
-				let timeout = ea.timeout.map(convert_duration);
 				let protocol = match ea
 					.protocol
 					.as_ref()
@@ -1257,6 +1348,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 				TrafficPolicy::ExtAuthz(http::ext_authz::ExtAuthz {
 					protocol,
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					failure_mode,
 					include_request_headers: ea
 						.include_request_headers
@@ -1272,7 +1365,6 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						)
 						.collect(),
 					include_request_body,
-					timeout,
 				})
 			},
 			Some(tps::Kind::Authorization(rbac)) => {
@@ -1305,8 +1397,20 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						} else {
 							Some(p.audiences.clone())
 						};
-						http::jwt::Provider::from_jwks(jwk_set, p.issuer.clone(), audiences)
-							.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))
+						let jwt_validation_options = p
+							.jwt_validation_options
+							.as_ref()
+							.map(|vo| http::jwt::JWTValidationOptions {
+								required_claims: vo.required_claims.iter().cloned().collect(),
+							})
+							.unwrap_or_default();
+						http::jwt::Provider::from_jwks(
+							jwk_set,
+							p.issuer.clone(),
+							audiences,
+							jwt_validation_options,
+						)
+						.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))
 					})
 					.collect::<Result<Vec<_>, _>>()?;
 				let jwt_auth = http::jwt::Jwt::from_providers(providers, mode);
@@ -1353,12 +1457,20 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 						"remote_rate_limit: target must be set".into(),
 					));
 				}
+				let failure_mode = match tps::remote_rate_limit::FailureMode::try_from(rrl.failure_mode) {
+					Ok(tps::remote_rate_limit::FailureMode::FailOpen) => {
+						http::remoteratelimit::FailureMode::FailOpen
+					},
+					// Default to FailClosed (proto default is FAIL_CLOSED = 0)
+					_ => http::remoteratelimit::FailureMode::FailClosed,
+				};
 				TrafficPolicy::RemoteRateLimit(http::remoteratelimit::RemoteRateLimit {
 					domain: rrl.domain.clone(),
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
-					// Not supported over XDS; use a timeout on the backend itself
-					timeout: None,
+					failure_mode,
 				})
 			},
 			Some(tps::Kind::Csrf(csrf_spec)) => {
@@ -1388,6 +1500,8 @@ impl TryFrom<&proto::agent::TrafficPolicySpec> for TrafficPolicy {
 				}
 				TrafficPolicy::ExtProc(http::ext_proc::ExtProc {
 					target: Arc::new(target),
+					// Not supported inline from xDS
+					policies: Vec::new(),
 					failure_mode,
 					request_attributes: to_cel_attrs(&ep.request_attributes),
 					response_attributes: to_cel_attrs(&ep.response_attributes),
@@ -1661,7 +1775,32 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 					})
 					.transpose()?
 					.unwrap_or_default();
-				FrontendPolicy::AccessLog(frontend::LoggingPolicy {
+				let otlp = p
+					.otlp_access_log
+					.as_ref()
+					.map(|oal| -> Result<frontend::OtlpLoggingConfig, ProtoError> {
+						let provider_backend = resolve_simple_reference(oal.provider_backend.as_ref())?;
+						let policies = oal
+							.inline_policies
+							.iter()
+							.map(BackendPolicy::try_from)
+							.collect::<Result<Vec<_>, _>>()?;
+						let protocol = match fps::logging::otlp_access_log::Protocol::try_from(oal.protocol) {
+							Ok(fps::logging::otlp_access_log::Protocol::Grpc) => {
+								types::agent::TracingProtocol::Grpc
+							},
+							_ => types::agent::TracingProtocol::Http,
+						};
+						let path = oal.path.clone().unwrap_or_else(|| "/v1/logs".to_string());
+						Ok(frontend::OtlpLoggingConfig {
+							provider_backend,
+							policies,
+							protocol,
+							path,
+						})
+					})
+					.transpose()?;
+				let mut logging_policy = frontend::LoggingPolicy {
 					filter: p
 						.filter
 						.as_ref()
@@ -1669,7 +1808,11 @@ impl TryFrom<&proto::agent::FrontendPolicySpec> for FrontendPolicy {
 						.map(Arc::new),
 					add: Arc::new(add),
 					remove: Arc::new(FzHashSet::new(rm)),
-				})
+					otlp,
+					access_log_policy: None,
+				};
+				logging_policy.init_access_log_policy();
+				FrontendPolicy::AccessLog(logging_policy)
 			},
 			Some(fps::Kind::Tracing(t)) => {
 				// Convert protobuf to TracingConfig
@@ -1740,6 +1883,8 @@ impl TryFrom<&proto::agent::frontend_policy_spec::Tracing> for types::agent::Tra
 
 		Ok(types::agent::TracingConfig {
 			provider_backend,
+			// Not supported inline from xDS
+			policies: Vec::new(),
 			attributes,
 			resources,
 			remove: t.remove.clone(),
@@ -2107,6 +2252,12 @@ mod tests {
 				]
 				.into_iter()
 				.collect(),
+				transformations: vec![(
+					"system".to_string(),
+					"\"Always answer in JSON\"".to_string(),
+				)]
+				.into_iter()
+				.collect(),
 				prompt_guard: None,
 				prompts: None,
 				model_aliases: Default::default(),
@@ -2117,6 +2268,7 @@ mod tests {
 						RouteType::Completions as i32,
 					),
 					("/v1/messages".to_string(), RouteType::Messages as i32),
+					("/v1/detect".to_string(), RouteType::Detect as i32),
 				]
 				.into_iter()
 				.collect(),
@@ -2131,6 +2283,10 @@ mod tests {
 				.overrides
 				.as_ref()
 				.expect("overrides should be set");
+			let transformation_policy = ai_policy
+				.transformations
+				.as_ref()
+				.expect("transformation_policy should be set");
 
 			// Verify defaults have correct types and values
 			let temp_val = defaults.get("temperature").unwrap();
@@ -2157,9 +2313,10 @@ mod tests {
 			let array_val = overrides.get("array_value").unwrap();
 			assert!(array_val.is_array(), "array_value should be an array");
 			assert_eq!(array_val, &json!([1, 2, 3]));
+			assert!(transformation_policy.get("system").is_some());
 
 			// Verify routes conversion
-			assert_eq!(ai_policy.routes.len(), 2);
+			assert_eq!(ai_policy.routes.len(), 3);
 			assert_eq!(
 				ai_policy.routes.get("/v1/chat/completions"),
 				Some(&llm::RouteType::Completions)
@@ -2168,10 +2325,87 @@ mod tests {
 				ai_policy.routes.get("/v1/messages"),
 				Some(&llm::RouteType::Messages)
 			);
+			assert_eq!(
+				ai_policy.routes.get("/v1/detect"),
+				Some(&llm::RouteType::Detect)
+			);
 		} else {
 			panic!("Expected AI policy variant");
 		}
 
+		Ok(())
+	}
+
+	#[test]
+	fn test_backend_policy_spec_to_transformation_policy() -> Result<(), ProtoError> {
+		let spec = proto::agent::BackendPolicySpec {
+			kind: Some(proto::agent::backend_policy_spec::Kind::Transformation(
+				proto::agent::traffic_policy_spec::TransformationPolicy {
+					request: Some(
+						proto::agent::traffic_policy_spec::transformation_policy::Transform {
+							set: vec![proto::agent::traffic_policy_spec::HeaderTransformation {
+								name: "x-backend-req".to_string(),
+								expression: "\"backend-req\"".to_string(),
+							}],
+							..Default::default()
+						},
+					),
+					response: Some(
+						proto::agent::traffic_policy_spec::transformation_policy::Transform {
+							add: vec![proto::agent::traffic_policy_spec::HeaderTransformation {
+								name: "x-backend-resp".to_string(),
+								expression: "\"backend-resp\"".to_string(),
+							}],
+							..Default::default()
+						},
+					),
+				},
+			)),
+		};
+
+		let policy = BackendPolicy::try_from(&spec)?;
+		let BackendPolicy::Transformation(transformation) = policy else {
+			panic!("Expected Transformation policy variant");
+		};
+		assert_eq!(transformation.expressions().count(), 2);
+		Ok(())
+	}
+
+	#[test]
+	fn test_backend_kind_aws_conversion() -> Result<(), ProtoError> {
+		use proto::agent::aws_backend::Service;
+
+		let arn = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/abc123".to_string();
+		let qualifier = Some("v1".to_string());
+		let proto_backend = proto::agent::Backend {
+			key: "test-ns/aws-backend".to_string(),
+			name: Some(proto::agent::ResourceName {
+				name: "aws-backend".to_string(),
+				namespace: "test-ns".to_string(),
+			}),
+			kind: Some(proto::agent::backend::Kind::Aws(proto::agent::AwsBackend {
+				service: Some(Service::AgentCore(proto::agent::AwsAgentCoreBackend {
+					agent_runtime_arn: arn.clone(),
+					qualifier: qualifier.clone(),
+				})),
+			})),
+			inline_policies: vec![],
+		};
+
+		let bw = BackendWithPolicies::try_from(&proto_backend)?;
+		let Backend::Aws(name, config) = &bw.backend else {
+			panic!("Expected Backend::Aws, got {:?}", bw.backend);
+		};
+		assert_eq!(name.to_string(), "test-ns/aws-backend");
+		assert_eq!(config.region(), "us-east-1");
+		assert_eq!(config.service_name(), "bedrock-agentcore");
+		assert_eq!(
+			config.get_host(),
+			"bedrock-agentcore.us-east-1.amazonaws.com"
+		);
+		let path = config.get_path();
+		assert!(path.starts_with("/runtimes/"));
+		assert!(path.contains("qualifier=v1"));
 		Ok(())
 	}
 }

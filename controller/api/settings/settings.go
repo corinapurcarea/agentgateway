@@ -127,6 +127,10 @@ type Settings struct {
 	// Defaults to "istio-system".
 	IstioNamespace string `split_words:"true" default:"istio-system"`
 
+	// IstioRevision is the Istio revision of the Istio control plane.
+	// Defaults to "default".
+	IstioRevision string `split_words:"true" default:"default"`
+
 	// XdsServiceHost is the host that serves xDS config.
 	// It overrides xdsServiceName if set.
 	XdsServiceHost string `split_words:"true"`
@@ -147,6 +151,10 @@ type Settings struct {
 	// AgentgatewayXdsServicePort is the port of the Kubernetes Service that serves xDS config for agentgateway.
 	// This corresponds to the value of the `grpc-xds-agw` port in the service.
 	AgentgatewayXdsServicePort uint32 `split_words:"true" default:"9978"`
+
+	// NoListenersDummyPort is the port exposed on the generated Service when a Gateway has no listeners.
+	// This keeps the LoadBalancer provisioned and address stable across transitions to zero listeners.
+	NoListenersDummyPort uint16 `split_words:"true" default:"443"`
 
 	// EnableInferExt defines whether to enable/disable support for Gateway API inference extension.
 	// If enabled, EnableAgentgateway should also be set to true. Enabling inference extension without agentgateway
@@ -187,7 +195,7 @@ type Settings struct {
 	// Controls if leader election is disabled. Defaults to false.
 	DisableLeaderElection bool `split_words:"true" default:"false"`
 
-	// EnableExperimentalGatewayAPIFeatures enables kgateway to support experimental features and APIs
+	// EnableExperimentalGatewayAPIFeatures enables support for experimental features and APIs
 	EnableExperimentalGatewayAPIFeatures bool `split_words:"true" default:"true"`
 
 	// GatewayClassParametersRefs configures the GatewayParameters references to set on the default GatewayClasses.

@@ -633,6 +633,17 @@ func (this *FrontendPolicySpec_Logging_Fields) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
+// MarshalJSON is a custom marshaler for FrontendPolicySpec_Logging_OtlpAccessLog
+func (this *FrontendPolicySpec_Logging_OtlpAccessLog) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for FrontendPolicySpec_Logging_OtlpAccessLog
+func (this *FrontendPolicySpec_Logging_OtlpAccessLog) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
 // MarshalJSON is a custom marshaler for FrontendPolicySpec_Tracing
 func (this *FrontendPolicySpec_Tracing) MarshalJSON() ([]byte, error) {
 	str, err := ResourceMarshaler.MarshalToString(this)
@@ -652,6 +663,17 @@ func (this *FrontendPolicySpec_TracingAttribute) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON is a custom unmarshaler for FrontendPolicySpec_TracingAttribute
 func (this *FrontendPolicySpec_TracingAttribute) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for JWTValidationOptions
+func (this *JWTValidationOptions) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for JWTValidationOptions
+func (this *JWTValidationOptions) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
@@ -1095,6 +1117,28 @@ func (this *BackendPolicySpec_InferenceRouting) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
+// MarshalJSON is a custom marshaler for BackendPolicySpec_Eviction
+func (this *BackendPolicySpec_Eviction) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_Eviction
+func (this *BackendPolicySpec_Eviction) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_Health
+func (this *BackendPolicySpec_Health) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_Health
+func (this *BackendPolicySpec_Health) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
 // MarshalJSON is a custom marshaler for BackendPolicySpec_BackendTLS
 func (this *BackendPolicySpec_BackendTLS) MarshalJSON() ([]byte, error) {
 	str, err := ResourceMarshaler.MarshalToString(this)
@@ -1114,6 +1158,17 @@ func (this *BackendPolicySpec_BackendHTTP) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_BackendHTTP
 func (this *BackendPolicySpec_BackendHTTP) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_BackendTunnel
+func (this *BackendPolicySpec_BackendTunnel) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_BackendTunnel
+func (this *BackendPolicySpec_BackendTunnel) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
@@ -1180,6 +1235,28 @@ func (this *DynamicForwardProxy) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON is a custom unmarshaler for DynamicForwardProxy
 func (this *DynamicForwardProxy) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for AwsBackend
+func (this *AwsBackend) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for AwsBackend
+func (this *AwsBackend) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for AwsAgentCoreBackend
+func (this *AwsAgentCoreBackend) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for AwsAgentCoreBackend
+func (this *AwsAgentCoreBackend) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 

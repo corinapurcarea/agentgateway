@@ -1,3 +1,8 @@
+use bytes::Bytes;
+use cel::types::dynamic::{DynamicType, DynamicValue};
+use serde::de::Error as DeError;
+use serde::ser::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -5,11 +10,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops;
 use std::ops::Deref;
 use std::sync::Arc;
-
-use cel::types::dynamic::{DynamicType, DynamicValue};
-use serde::de::Error as DeError;
-use serde::ser::Error;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::ast::{EntryExpr, Expr, OptimizedExpr, operators};
 use crate::common::value::CelVal;
@@ -114,31 +114,69 @@ impl Value<'_> {
 			Value::UInt(u) => {
 				usize::try_from(*u).map_err(|_e| ExecutionError::Conversion("usize", self.as_static()))
 			},
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_unsigned();
+				debug_assert!(res.is_err(), "numbers should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("usize", self.as_static())),
 		}
 	}
+
 	pub fn as_signed(&self) -> Result<i64, ExecutionError> {
 		match self {
 			Value::Int(i) => Ok(*i),
 			Value::UInt(u) => {
 				i64::try_from(*u).map_err(|_e| ExecutionError::Conversion("i64", self.as_static()))
 			},
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_signed();
+				debug_assert!(res.is_err(), "numbers should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("i64", self.as_static())),
 		}
 	}
+
 	pub fn as_bool(&self) -> Result<bool, ExecutionError> {
 		match self {
 			Value::Bool(b) => Ok(*b),
+			Value::Dynamic(d) => {
+				let res = d.materialize().as_bool();
+				debug_assert!(res.is_err(), "bools should be auto_materialized");
+				res
+			},
 			_ => Err(ExecutionError::Conversion("bool", self.as_static())),
 		}
 	}
-	pub fn as_bytes(&self) -> Result<&[u8], ExecutionError> {
+
+	/// as_bytes converts a Value into bytes
+	/// warning: callers are responsible for materializing values due to ownership
+	pub fn as_bytes_pre_materialized(&self) -> Result<&[u8], ExecutionError> {
 		match self {
 			Value::String(b) => Ok(b.as_ref().as_bytes()),
 			Value::Bytes(b) => Ok(b.as_ref()),
 			_ => Err(ExecutionError::Conversion("bytes", self.as_static())),
 		}
 	}
+	/// warning: callers are responsible for materializing values due to ownership
+	pub fn as_bytes_owned(&self) -> Result<Bytes, ExecutionError> {
+		match self {
+			Value::String(s) => Ok(Bytes::copy_from_slice(s.as_ref().as_bytes())),
+			Value::Bytes(BytesValue::Bytes(b)) => Ok(b.clone()),
+			Value::Bytes(b) => Ok(Bytes::copy_from_slice(b.as_ref())),
+			Value::Dynamic(d) => {
+				// No assertion here as there are viable cases for not auto materializing bytes/string
+				d.materialize().as_bytes_owned()
+			},
+			_ => Err(ExecutionError::Conversion("bytes", self.as_static())),
+		}
+	}
+
+	pub fn as_string(&self) -> Result<String, ExecutionError> {
+		self.as_str().map(|s| s.into_owned())
+	}
+
 	// Note: may allocate
 	pub fn as_str(&self) -> Result<Cow<'_, str>, ExecutionError> {
 		match self {
@@ -650,26 +688,42 @@ impl<'a> Value<'a> {
 							}
 						},
 						operators::LOGICAL_OR => {
-							let left = resolve(&call.args[0])?;
-							return if left.to_bool()? {
-								left.into()
+							let left = try_bool(resolve(&call.args[0]));
+							return if Ok(true) == left {
+								Ok(true.into())
 							} else {
-								resolve(&call.args[1])
+								let right = if let Value::Bool(b) = resolve_materialized(&call.args[1])? {
+									Some(b)
+								} else {
+									None
+								};
+								match (&left, right) {
+									(Ok(false), Some(right)) => Ok(right.into()),
+									(Err(_), Some(true)) => Ok(true.into()),
+									(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
+								}
 							};
 						},
 						operators::LOGICAL_AND => {
-							let left = resolve(&call.args[0])?;
-							return if !left.to_bool()? {
-								Value::Bool(false)
+							let left = try_bool(resolve(&call.args[0]));
+							return if Ok(false) == left {
+								Ok(false.into())
 							} else {
-								let right = resolve(&call.args[1])?;
-								Value::Bool(right.to_bool()?)
-							}
-							.into();
+								let right = if let Value::Bool(b) = resolve_materialized(&call.args[1])? {
+									Some(b)
+								} else {
+									None
+								};
+								match (&left, right) {
+									(Ok(true), Some(right)) => Ok(right.into()),
+									(Err(_), Some(false)) => Ok(false.into()),
+									(_, _) => Err(left.err().unwrap_or(ExecutionError::NoSuchOverload)),
+								}
+							};
 						},
 						operators::INDEX | operators::OPT_INDEX => {
 							let mut value: Value<'a> = resolve(&call.args[0])?;
-							let idx = resolve(&call.args[1])?;
+							let idx = resolve_materialized(&call.args[1])?;
 							let mut is_optional = call.func_name == operators::OPT_INDEX;
 
 							if let Ok(opt_val) = <&OptionalValue>::try_from(&value) {
@@ -743,7 +797,7 @@ impl<'a> Value<'a> {
 						},
 						operators::OPT_SELECT => {
 							let operand = resolve(&call.args[0])?;
-							let field_literal = resolve(&call.args[1])?;
+							let field_literal = resolve_materialized(&call.args[1])?;
 							let field = match field_literal {
 								Value::String(s) => s,
 								_ => {
@@ -816,11 +870,17 @@ impl<'a> Value<'a> {
 						}
 						let tgt = Some(resolve(target)?);
 
-						// Try call_function first for opaque objects
+						// Try call_function first for opaque and dynamic objects.
 						if let Some(Value::Object(ob)) = &tgt {
 							let ob = ob.clone();
 							let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
 							if let Some(result) = ob.call_function(call.func_name.as_str(), &mut fctx) {
+								return result;
+							}
+						}
+						if let Some(Value::Dynamic(dynamic)) = &tgt {
+							let mut fctx = FunctionContext::new(&call.func_name, None, ctx, &call.args, resolver);
+							if let Some(result) = dynamic.call_function(call.func_name.as_str(), &mut fctx) {
 								return result;
 							}
 						}
@@ -855,7 +915,7 @@ impl<'a> Value<'a> {
 				}
 				let left: Value<'a> = resolve(left_op)?;
 				if select.test {
-					match &left {
+					match left.always_materialize().as_ref() {
 						Value::Map(map) => {
 							let b = map.contains_key(&KeyRef::String(select.field.as_str().into()));
 							Ok(Value::Bool(b))
@@ -917,7 +977,7 @@ impl<'a> Value<'a> {
 			},
 			Expr::Comprehension(comprehension) => {
 				let accu_init = resolve(&comprehension.accu_init)?;
-				let iter = resolve(&comprehension.iter_range)?;
+				let iter = resolve_materialized(&comprehension.iter_range)?;
 				let mut accu = accu_init;
 				match iter {
 					Value::List(items) => {
@@ -944,7 +1004,7 @@ impl<'a> Value<'a> {
 							accu = Value::resolve(&comprehension.loop_step, ctx, &with_iter)?;
 						}
 					},
-					t => todo!("Support {t:?}"),
+					_ => return Err(crate::ExecutionError::NoSuchOverload),
 				}
 				let comp_resolver = SingleVarResolver::new(resolver, &comprehension.accu_var, accu);
 				Value::resolve(&comprehension.result, ctx, &comp_resolver)
@@ -1186,6 +1246,14 @@ impl<'a> ops::Rem<Value<'a>> for Value<'a> {
 	}
 }
 
+fn try_bool(val: ResolveResult) -> Result<bool, ExecutionError> {
+	match val {
+		Ok(Value::Bool(b)) => Ok(b),
+		Ok(_) => Err(ExecutionError::NoSuchOverload),
+		Err(err) => Result::Err(err),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use std::collections::HashMap;
@@ -1383,6 +1451,36 @@ mod tests {
 	}
 
 	#[test]
+	fn test_or_ignores_err_when_short_circuiting() {
+		let mut vars = MapResolver::new();
+		vars.add_variable_from_value("foo", 42);
+		vars.add_variable_from_value("bar", 42);
+		vars.add_variable_from_value("list", Value::List(ListValue::Owned(vec![].into())));
+		let context = Context::default();
+		let program = Program::compile("foo || bar > 0").unwrap();
+		let value = program.execute_with(&context, &vars);
+		assert_eq!(value, Ok(true.into()));
+
+		let program = Program::compile("foo || bar < 0").unwrap();
+		let value = program.execute_with(&context, &vars);
+		assert!(value.is_err());
+	}
+
+	#[test]
+	fn test_and_ignores_err_when_short_circuiting() {
+		let context = Context::default();
+		let mut vars = MapResolver::new();
+		vars.add_variable_from_value("foo", 42);
+		vars.add_variable_from_value("bar", 42);
+		let program = Program::compile("foo && bar < 0").unwrap();
+		let value = program.execute_with(&context, &vars);
+		assert_eq!(value, Ok(false.into()));
+
+		let program = Program::compile("foo && bar > 0").unwrap();
+		let value = program.execute_with(&context, &vars);
+		assert!(value.is_err());
+	}
+	#[test]
 	fn invalid_int_math() {
 		use ExecutionError::*;
 
@@ -1494,6 +1592,72 @@ mod tests {
 		let result = p.execute_with(&ctx, &vars);
 
 		assert!(result.is_err(), "Should error on missing map key");
+	}
+
+	mod dynamic {
+		use std::sync::Arc;
+
+		use crate::context::MapResolver;
+		use crate::objects::StringValue;
+		use crate::types::dynamic::{DynamicType, DynamicValue};
+		use crate::{Context, ExecutionError, FunctionContext, Program, Value};
+
+		#[derive(Debug)]
+		struct MyDynamic {
+			field: &'static str,
+		}
+
+		impl DynamicType for MyDynamic {
+			fn materialize(&self) -> Value<'_> {
+				let mut map = vector_map::VecMap::with_capacity(1);
+				map.insert(
+					crate::objects::KeyRef::from("field"),
+					Value::from(self.field),
+				);
+				Value::Map(crate::objects::MapValue::Borrow(map))
+			}
+
+			fn field(&self, field: &str) -> Option<Value<'_>> {
+				match field {
+					"field" => Some(Value::from(self.field)),
+					_ => None,
+				}
+			}
+
+			fn call_function<'a, 'rf>(
+				&self,
+				name: &str,
+				ftx: &mut FunctionContext<'a, 'rf>,
+			) -> Option<crate::ResolveResult<'a>>
+			where
+				Self: 'a,
+			{
+				match name {
+					"next" => Some(if ftx.args.is_empty() {
+						Ok(Value::Dynamic(DynamicValue::new_owned(MyDynamic {
+							field: "next",
+						})))
+					} else {
+						Err(ExecutionError::invalid_argument_count(0, ftx.args.len()))
+					}),
+					_ => None,
+				}
+			}
+		}
+
+		#[test]
+		fn test_dynamic_fn() {
+			let value = MyDynamic { field: "value" };
+
+			let mut vars = MapResolver::new();
+			vars.add_variable_from_value("mine", Value::Dynamic(DynamicValue::new(&value)));
+			let ctx = Context::default();
+			let prog = Program::compile("mine.next().field").unwrap();
+			assert_eq!(
+				Ok(Value::String(StringValue::Owned(Arc::from("next")))),
+				prog.execute_with(&ctx, &vars)
+			);
+		}
 	}
 
 	mod opaque {

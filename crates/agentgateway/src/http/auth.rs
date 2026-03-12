@@ -1,11 +1,12 @@
-use secrecy::{ExposeSecret, SecretString};
-
 use crate::http::Request;
 use crate::http::jwt::Claims;
 use crate::proxy::ProxyError;
+use crate::proxy::ProxyError::ProcessingString;
 use crate::serdes::deser_key_from_file;
 use crate::types::agent::{BackendTarget, Target};
 use crate::*;
+use ::http::HeaderValue;
+use secrecy::{ExposeSecret, SecretString};
 
 #[apply(schema!)]
 #[serde(untagged)]
@@ -145,6 +146,22 @@ pub struct BackendInfo {
 	pub inputs: Arc<ProxyInputs>,
 }
 
+pub fn apply_tunnel_auth(auth: &BackendAuth) -> Result<HeaderValue, ProxyError> {
+	match auth {
+		BackendAuth::Key(k) => {
+			// TODO: currently we only support basic auth; this is not great but we are pending the ability
+			// to customize this
+			let mut token = http::HeaderValue::from_str(&format!("Basic {}", k.expose_secret()))
+				.map_err(|e| ProxyError::Processing(e.into()))?;
+			token.set_sensitive(true);
+
+			Ok(token)
+		},
+		_ => Err(ProcessingString(
+			"only key auth is supported in tunnel".to_string(),
+		)),
+	}
+}
 pub async fn apply_backend_auth(
 	backend_info: &BackendInfo,
 	auth: &BackendAuth,
@@ -400,7 +417,7 @@ mod aws {
 	use tokio::sync::OnceCell;
 
 	use crate::http::auth::AwsAuth;
-	use crate::llm::bedrock::AwsRegion;
+	use crate::llm::bedrock::{AwsRegion, AwsServiceName};
 	use crate::*;
 
 	pub async fn sign_request(req: &mut http::Request, aws_auth: &AwsAuth) -> anyhow::Result<()> {
@@ -418,7 +435,7 @@ mod aws {
 					aws_region.region.as_str()
 				} else {
 					// Fall back to region from AWS config
-					let config = sdk_config().await;
+					let config = Box::pin(sdk_config()).await;
 					config.region().map(|r| r.as_ref()).ok_or(anyhow::anyhow!(
 						"No region found in AWS config or request extensions"
 					))?
@@ -426,13 +443,18 @@ mod aws {
 			},
 		};
 
-		trace!("AWS signing with region: {}, service: bedrock", region);
+		let service = req
+			.extensions()
+			.get::<AwsServiceName>()
+			.map(|s| s.name)
+			.unwrap_or("bedrock");
+		trace!("AWS signing with region: {}, service: {}", region, service);
 
 		// Sign the request
 		let signing_params = SigningParams::builder()
 			.identity(&creds)
 			.region(region)
-			.name("bedrock")
+			.name(service)
 			.time(std::time::SystemTime::now())
 			.settings(aws_sigv4::http_request::SigningSettings::default())
 			.build()?
@@ -497,7 +519,7 @@ mod aws {
 			},
 			AwsAuth::Implicit {} => {
 				// Load AWS configuration and credentials from environment/IAM
-				let config = sdk_config().await;
+				let config = Box::pin(sdk_config()).await;
 
 				// Get credentials from the config
 				// TODO this is not caching!!

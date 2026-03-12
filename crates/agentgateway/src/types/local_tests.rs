@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::Path;
 
+use crate::types::agent::HeaderValueMatch;
 use crate::types::local::NormalizedLocalConfig;
 use crate::*;
 
 async fn test_config_parsing(test_name: &str) {
+	// Make it static
+	super::STARTUP_TIMESTAMP.get_or_init(|| 0);
 	let test_dir = Path::new("src/types/local_tests");
 	let input_path = test_dir.join(format!("{}_config.yaml", test_name));
 
@@ -33,18 +36,16 @@ async fn test_config_parsing(test_name: &str) {
 		&yaml_str,
 	)
 	.await
-	.unwrap_or_else(|_| panic!("Failed to normalize config from: {:?}", input_path));
-
-	let output_yaml = serdes::yamlviajson::to_string(&normalized)
-		.expect("Failed to serialize NormalizedLocalConfig to YAML");
+	.unwrap_or_else(|e| panic!("Failed to normalize config from: {:?} {e}", input_path));
 
 	insta::with_settings!({
 		description => format!("Config normalization test for {}: YAML -> LocalConfig -> NormalizedLocalConfig -> YAML", test_name),
 		omit_expression => true,
 		prepend_module_to_snapshot => false,
 		snapshot_path => "local_tests",
+		sort_maps => true,
 	}, {
-		insta::assert_snapshot!(format!("{}_normalized", test_name), output_yaml);
+		insta::assert_yaml_snapshot!(format!("{}_normalized", test_name), normalized);
 	});
 }
 
@@ -61,4 +62,99 @@ async fn test_mcp_config() {
 #[tokio::test]
 async fn test_llm_config() {
 	test_config_parsing("llm").await;
+}
+
+#[tokio::test]
+async fn test_llm_simple_config() {
+	test_config_parsing("llm_simple").await;
+}
+
+#[tokio::test]
+async fn test_mcp_simple_config() {
+	test_config_parsing("mcp_simple").await;
+}
+
+#[tokio::test]
+async fn test_aws_config() {
+	test_config_parsing("aws").await;
+}
+
+#[tokio::test]
+async fn test_health_config() {
+	test_config_parsing("health").await;
+}
+
+#[test]
+fn test_llm_model_name_header_match_valid_patterns() {
+	match super::llm_model_name_header_match("*").unwrap() {
+		HeaderValueMatch::Regex(re) => assert_eq!(re.as_str(), ".*"),
+		other => panic!("expected regex for '*', got {other:?}"),
+	}
+
+	match super::llm_model_name_header_match("*gpt-4.1").unwrap() {
+		HeaderValueMatch::Regex(re) => assert_eq!(re.as_str(), ".*gpt\\-4\\.1"),
+		other => panic!("expected regex for '*gpt-4.1', got {other:?}"),
+	}
+
+	match super::llm_model_name_header_match("gpt-4.1*").unwrap() {
+		HeaderValueMatch::Regex(re) => assert_eq!(re.as_str(), "gpt\\-4\\.1.*"),
+		other => panic!("expected regex for 'gpt-4.1*', got {other:?}"),
+	}
+
+	match super::llm_model_name_header_match("gpt-4.1").unwrap() {
+		HeaderValueMatch::Exact(v) => assert_eq!(v, ::http::HeaderValue::from_static("gpt-4.1")),
+		other => panic!("expected exact header value for 'gpt-4.1', got {other:?}"),
+	}
+}
+
+#[test]
+fn test_llm_model_name_header_match_invalid_patterns() {
+	assert!(super::llm_model_name_header_match("*gpt*").is_err());
+	assert!(super::llm_model_name_header_match("g*pt").is_err());
+}
+
+#[test]
+fn test_migrate_deprecated_local_config_moves_fields() {
+	let input = r#"
+config:
+  logging:
+    level: info
+    filter: request.path == "/foo"
+    fields:
+      remove:
+        - foo
+      add:
+        region: request.host
+  tracing:
+    otlpEndpoint: otlp.default.svc.cluster.local:4317
+    headers:
+      authorization: token
+    otlpProtocol: http
+"#;
+	let out = super::migrate_deprecated_local_config(input).unwrap();
+	let v: serde_json::Value = crate::serdes::yamlviajson::from_str(&out).unwrap();
+	let cfg = v.get("config").unwrap();
+	let logging = cfg.get("logging").unwrap();
+	assert_eq!(logging.get("level").unwrap(), "info");
+	assert!(logging.get("filter").is_none());
+	assert!(logging.get("fields").is_none());
+	assert!(cfg.get("tracing").is_none());
+	let frontend = v.get("frontendPolicies").unwrap();
+	assert!(frontend.get("logging").is_none());
+	let access_log = frontend.get("accessLog").unwrap();
+	assert_eq!(
+		access_log.get("filter").unwrap(),
+		"request.path == \"/foo\""
+	);
+	assert_eq!(
+		access_log.get("add").unwrap().get("region").unwrap(),
+		"request.host"
+	);
+	assert_eq!(access_log.get("remove").unwrap()[0], "foo");
+	let tracing = frontend.get("tracing").unwrap();
+	assert_eq!(
+		tracing.get("inlineBackend").unwrap(),
+		"otlp.default.svc.cluster.local:4317"
+	);
+	assert_eq!(tracing.get("protocol").unwrap(), "http");
 }

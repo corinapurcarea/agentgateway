@@ -1,9 +1,19 @@
 use std::collections::HashSet;
 
-use http::Method;
-
 use super::*;
 use crate::http::Body;
+use http::{HeaderValue, Method};
+use serde_json::json;
+
+fn eval(expr: &str) -> Result<serde_json::Value, Error> {
+	let exec_serde = full_example_executor();
+	let exec = exec_serde.as_executor();
+	let exp = Expression::new_strict(expr)?;
+	exec
+		.eval(&exp)?
+		.json()
+		.map_err(|e| Error::Variable(format!("{e}")))
+}
 
 fn eval_request(expr: &str, req: crate::http::Request) -> Result<Value, Error> {
 	let mut cb = ContextBuilder::new();
@@ -33,6 +43,125 @@ fn expression() {
 		.body(Body::empty())
 		.unwrap();
 	assert_eq!(Value::Bool(true), eval_request(expr, req).unwrap());
+}
+
+fn request_with_header_modes() -> crate::http::Request {
+	let mut req = ::http::Request::builder()
+		.method(Method::GET)
+		.uri("http://example.com")
+		.header("single", "z")
+		.header("multi", "a,b")
+		.body(Body::empty())
+		.unwrap();
+	req.headers_mut().append("multi", "c".parse().unwrap());
+	let mut authorization = HeaderValue::from_static("Bearer token");
+	authorization.set_sensitive(true);
+	req.headers_mut().insert("authorization", authorization);
+	req
+}
+
+mod headers {
+	use crate::cel::tests::{eval_request, request_with_header_modes};
+	use cel::Value;
+
+	#[test]
+	fn lookup_default() {
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.headers.multi == ['a,b', 'c']"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+		);
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(
+				r#"request.headers.single == 'z'"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+		);
+	}
+
+	#[test]
+	fn redacted() {
+		assert_eq!(
+			"Bearer token",
+			eval_request(
+				r#"request.headers.authorization"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.as_ref()
+		);
+		assert_eq!(
+			"<redacted>",
+			eval_request(
+				r#"request.headers.redacted().authorization"#,
+				request_with_header_modes()
+			)
+			.unwrap()
+			.as_str()
+			.unwrap()
+			.as_ref()
+		);
+	}
+
+	#[test]
+	fn join() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.join().multi == "a,b,c""#, req).unwrap()
+		);
+	}
+
+	#[test]
+	fn raw() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.raw().multi == ['a,b','c']"#, req,).unwrap()
+		);
+	}
+
+	#[test]
+	fn split() {
+		let req = request_with_header_modes();
+		assert_eq!(
+			Value::Bool(true),
+			eval_request(r#"request.headers.split().multi == ['a','b','c']"#, req,).unwrap()
+		);
+	}
+
+	#[test]
+	fn chained() {
+		let req = request_with_header_modes();
+		assert_eq!(
+				Value::Bool(true),
+				eval_request(
+					r#"size(request.headers.redacted().raw()["authorization"]) == 1 && request.headers.redacted().raw()["authorization"][0] == "<redacted>""#,
+					req,
+				)
+				.unwrap()
+			);
+	}
+
+	#[test]
+	fn last_mode_wins() {
+		let req = request_with_header_modes();
+		assert_eq!(
+				Value::Bool(true),
+				eval_request(
+					r#"request.headers.raw().join().multi == "a,b,c" && request.headers.join().split().multi == ['a','b','c']"#,
+					req,
+				)
+				.unwrap()
+			);
+	}
 }
 
 #[test]
@@ -72,4 +201,35 @@ fn test_properties() {
 	// Test extauthz namespace recognition
 	test(r#"extauthz.user_id"#, &["extauthz.user_id"]);
 	test(r#"extauthz.role == "admin""#, &["extauthz.role"]);
+}
+
+#[test]
+fn map() {
+	let expr = r#"request.headers.map(v, v)"#;
+	let v = eval(expr).unwrap();
+	let v = v.as_array().unwrap();
+	assert!(v.contains(&json!("user-agent")), "{v:?}");
+}
+
+#[test]
+fn map_filter_dynamic_bool() {
+	let expr = r#"[1, 2].map(x, llm.streaming, x + 1)"#;
+	assert_eq!(json!([]), eval(expr).unwrap());
+}
+
+#[test]
+fn dynamic_bool_in_logical_ops() {
+	assert_eq!(json!(false), eval(r#"false || llm.streaming"#).unwrap());
+	assert_eq!(json!(false), eval(r#"true && llm.streaming"#).unwrap());
+}
+
+#[test]
+fn dynamic_index_key() {
+	let expr = r#"{"bar": 1}[request.headers["foo"]]"#;
+	assert_eq!(json!(1), eval(expr).unwrap());
+}
+
+#[test]
+fn has_on_dynamic_map() {
+	assert_eq!(json!(true), eval(r#"has(request.headers.foo)"#).unwrap());
 }

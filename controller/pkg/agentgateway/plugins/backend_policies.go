@@ -27,11 +27,14 @@ import (
 const (
 	aiPolicySuffix                = ":ai"
 	backendTlsPolicySuffix        = ":backend-tls"
+	backendTunnelPolicySuffix     = ":backend-tunnel"
 	backendauthPolicySuffix       = ":backend-auth"
+	backendTransformationSuffix   = ":backend-transformation"
 	tlsPolicySuffix               = ":tls"
 	backendHttpPolicySuffix       = ":backend-http"
 	mcpAuthorizationPolicySuffix  = ":mcp-authorization"
 	mcpAuthenticationPolicySuffix = ":mcp-authentication"
+	healthPolicySuffix            = ":health"
 )
 
 func TranslateInlineBackendPolicy(
@@ -47,8 +50,8 @@ func TranslateInlineBackendPolicy(
 		Spec: agentgateway.AgentgatewayPolicySpec{Backend: policy},
 	}
 	res, err := translateBackendPolicyToAgw(ctx, dummy, nil)
-	return slices.MapFilter(res, func(e AgwPolicy) **api.BackendPolicySpec {
-		return ptr.Of(e.Policy.GetBackend())
+	return slices.MapFilter(res, func(e *api.Policy) **api.BackendPolicySpec {
+		return ptr.Of(e.GetBackend())
 	}), err
 }
 
@@ -56,19 +59,30 @@ func translateBackendPolicyToAgw(
 	ctx PolicyCtx,
 	policy *agentgateway.AgentgatewayPolicy,
 	policyTarget *api.PolicyTarget,
-) ([]AgwPolicy, error) {
+) ([]*api.Policy, error) {
 	backend := policy.Spec.Backend
 	if backend == nil {
 		return nil, nil
 	}
-	agwPolicies := make([]AgwPolicy, 0)
+	agwPolicies := make([]*api.Policy, 0)
 	var errs []error
 
 	policyName := getBackendPolicyName(policy.Namespace, policy.Name)
 
 	if s := backend.HTTP; s != nil {
 		pol := translateBackendHTTP(policy, policyTarget)
-		agwPolicies = append(agwPolicies, pol...)
+		agwPolicies = append(agwPolicies, pol)
+	}
+
+	if s := backend.Tunnel; s != nil {
+		pol, err := translateBackendTunnel(ctx, policy, policyTarget)
+		if err != nil {
+			logger.Error("error processing backend tunnel", "err", err)
+			errs = append(errs, err)
+		}
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
 	}
 
 	if s := backend.TLS; s != nil {
@@ -77,7 +91,9 @@ func translateBackendPolicyToAgw(
 			logger.Error("error processing backend TLS", "err", err)
 			errs = append(errs, err)
 		}
-		agwPolicies = append(agwPolicies, pol...)
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
 	}
 
 	if s := backend.TCP; s != nil {
@@ -86,13 +102,39 @@ func translateBackendPolicyToAgw(
 			logger.Error("error processing backend TCP", "err", err)
 			errs = append(errs, err)
 		}
-		agwPolicies = append(agwPolicies, pol...)
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
+	}
+
+	if s := backend.Health; s != nil {
+		pol, err := translateBackendHealthPolicy(policy, policyTarget)
+		if err != nil {
+			logger.Error("error processing backend health policy", "err", err)
+			errs = append(errs, err)
+		}
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
+	}
+
+	if s := backend.Transformation; s != nil {
+		pol, err := translateBackendTransformation(policy, policyTarget)
+		if err != nil {
+			logger.Error("error processing backend transformation", "err", err)
+			errs = append(errs, err)
+		}
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
 	}
 
 	if s := backend.MCP; s != nil {
 		if backend.MCP.Authorization != nil {
 			pol := translateBackendMCPAuthorization(policy, policyTarget)
-			agwPolicies = append(agwPolicies, pol...)
+			if pol != nil {
+				agwPolicies = append(agwPolicies, pol)
+			}
 		}
 
 		if backend.MCP.Authentication != nil {
@@ -101,7 +143,9 @@ func translateBackendPolicyToAgw(
 				logger.Error("error processing backend mcp auth", "err", err)
 				errs = append(errs, err)
 			}
-			agwPolicies = append(agwPolicies, pol...)
+			if pol != nil {
+				agwPolicies = append(agwPolicies, pol)
+			}
 		}
 	}
 
@@ -111,7 +155,9 @@ func translateBackendPolicyToAgw(
 			logger.Error("error processing backend AI", "err", err)
 			errs = append(errs, err)
 		}
-		agwPolicies = append(agwPolicies, pol...)
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
 	}
 
 	if s := backend.Auth; s != nil {
@@ -120,18 +166,114 @@ func translateBackendPolicyToAgw(
 			logger.Error("error processing backend Auth", "err", err)
 			errs = append(errs, err)
 		}
-		agwPolicies = append(agwPolicies, pol...)
+		if pol != nil {
+			agwPolicies = append(agwPolicies, pol)
+		}
 	}
 
 	return agwPolicies, errors.Join(errs...)
 }
 
-func translateBackendTCP(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, name string, target *api.PolicyTarget) ([]AgwPolicy, error) {
+func translateBackendHealthPolicy(policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) (*api.Policy, error) {
+	var errs []error
+
+	healthPolicy := policy.Spec.Backend.Health
+
+	var evictionProto *api.BackendPolicySpec_Eviction
+	if healthPolicy.Eviction != nil {
+		var duration *durationpb.Duration
+		if healthPolicy.Eviction.Duration != nil {
+			duration = durationpb.New(healthPolicy.Eviction.Duration.Duration)
+		}
+
+		// Convert 0–100 integer scores into 0.0–1.0 doubles for proto
+		var healthThreshold *float64
+		if healthPolicy.Eviction.HealthThreshold != nil {
+			val := float64(*healthPolicy.Eviction.HealthThreshold) / 100.0
+			healthThreshold = &val
+		}
+		var restoreHealth *float64
+		if healthPolicy.Eviction.RestoreHealth != nil {
+			val := float64(*healthPolicy.Eviction.RestoreHealth) / 100.0
+			restoreHealth = &val
+		}
+
+		evictionProto = &api.BackendPolicySpec_Eviction{
+			Duration:            duration,
+			RestoreHealth:       restoreHealth,
+			ConsecutiveFailures: healthPolicy.Eviction.ConsecutiveFailures,
+			HealthThreshold:     healthThreshold,
+		}
+	}
+
+	var unhealthyCondition string
+	if healthPolicy.UnhealthyCondition != nil {
+		unhealthyCondition = string(*healthPolicy.UnhealthyCondition)
+	}
+
+	p := &api.BackendPolicySpec_Health{
+		UnhealthyCondition: unhealthyCondition,
+		Eviction:           evictionProto,
+	}
+	evictPolicy := &api.Policy{
+		Key:    policy.Namespace + "/" + policy.Name + healthPolicySuffix + attachmentName(target),
+		Name:   TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Target: target,
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_Health_{
+					Health: p,
+				},
+			},
+		},
+	}
+
+	return evictPolicy, errors.Join(errs...)
+}
+
+func translateBackendTCP(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, name string, target *api.PolicyTarget) (*api.Policy, error) {
 	// TODO
 	return nil, nil
 }
 
-func translateBackendTLS(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) ([]AgwPolicy, error) {
+func translateBackendTransformation(
+	policy *agentgateway.AgentgatewayPolicy,
+	target *api.PolicyTarget,
+) (*api.Policy, error) {
+	var errs []error
+	transformation := policy.Spec.Backend.Transformation
+
+	convertedReq, err := convertTransformSpec(transformation.Request)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	convertedResp, err := convertTransformSpec(transformation.Response)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	tp := &api.Policy{
+		Key:    policy.Namespace + "/" + policy.Name + backendTransformationSuffix + attachmentName(target),
+		Name:   TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Target: target,
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_Transformation{
+					Transformation: &api.TrafficPolicySpec_TransformationPolicy{
+						Request:  convertedReq,
+						Response: convertedResp,
+					},
+				},
+			},
+		},
+	}
+	logger.Debug("generated backend transformation policy",
+		"policy", policy.Name,
+		"agentgateway_policy", tp.Name)
+	return tp, errors.Join(errs...)
+}
+
+func translateBackendTLS(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) (*api.Policy, error) {
 	var errs []error
 	tls := policy.Spec.Backend.TLS
 
@@ -221,10 +363,10 @@ func translateBackendTLS(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy,
 		"policy", policy.Name,
 		"agentgateway_policy", tlsPolicy.Name)
 
-	return []AgwPolicy{{Policy: tlsPolicy}}, errors.Join(errs...)
+	return tlsPolicy, errors.Join(errs...)
 }
 
-func translateBackendHTTP(policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) []AgwPolicy {
+func translateBackendHTTP(policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) *api.Policy {
 	http := policy.Spec.Backend.HTTP
 	p := &api.BackendPolicySpec_BackendHTTP{}
 	if v := http.Version; v != nil {
@@ -254,10 +396,40 @@ func translateBackendHTTP(policy *agentgateway.AgentgatewayPolicy, target *api.P
 		"policy", policy.Name,
 		"agentgateway_policy", tp.Name)
 
-	return []AgwPolicy{{Policy: tp}}
+	return tp
 }
 
-func translateBackendMCPAuthorization(policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) []AgwPolicy {
+func translateBackendTunnel(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) (*api.Policy, error) {
+	tunnel := policy.Spec.Backend.Tunnel
+
+	proxy, err := buildBackendRef(ctx, tunnel.BackendRef, policy.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	tunnelPolicy := &api.Policy{
+		Key:    policy.Namespace + "/" + policy.Name + backendTunnelPolicySuffix + attachmentName(target),
+		Name:   TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Target: target,
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_BackendTunnel_{
+					BackendTunnel: &api.BackendPolicySpec_BackendTunnel{
+						Proxy: proxy,
+					},
+				},
+			},
+		},
+	}
+
+	logger.Debug("generated backend tunnel policy",
+		"policy", policy.Name,
+		"agentgateway_policy", tunnelPolicy.Name)
+
+	return tunnelPolicy, nil
+}
+
+func translateBackendMCPAuthorization(policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) *api.Policy {
 	backend := policy.Spec.Backend
 	if backend == nil || backend.MCP == nil || backend.MCP.Authorization == nil {
 		return nil
@@ -290,10 +462,10 @@ func translateBackendMCPAuthorization(policy *agentgateway.AgentgatewayPolicy, t
 		"policy", policy.Name,
 		"agentgateway_policy", mcpPolicy.Name)
 
-	return []AgwPolicy{{Policy: mcpPolicy}}
+	return mcpPolicy
 }
 
-func translateBackendMCPAuthentication(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) ([]AgwPolicy, error) {
+func translateBackendMCPAuthentication(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, target *api.PolicyTarget) (*api.Policy, error) {
 	backend := policy.Spec.Backend
 	if backend == nil || backend.MCP == nil || backend.MCP.Authentication == nil {
 		return nil, nil
@@ -312,8 +484,8 @@ func translateBackendMCPAuthentication(ctx PolicyCtx, policy *agentgateway.Agent
 		}
 	}
 
-	// default mode is Optional
-	mode := api.BackendPolicySpec_McpAuthentication_OPTIONAL
+	// default mode is Strict
+	mode := api.BackendPolicySpec_McpAuthentication_STRICT
 	if authnPolicy.Mode == agentgateway.JWTAuthenticationModeStrict {
 		mode = api.BackendPolicySpec_McpAuthentication_STRICT
 	} else if authnPolicy.Mode == agentgateway.JWTAuthenticationModePermissive {
@@ -378,11 +550,11 @@ func translateBackendMCPAuthentication(ctx PolicyCtx, policy *agentgateway.Agent
 		"policy", policy.Name,
 		"agentgateway_policy", mcpAuthnPolicy.Name)
 
-	return []AgwPolicy{{Policy: mcpAuthnPolicy}}, errors.Join(errs...)
+	return mcpAuthnPolicy, errors.Join(errs...)
 }
 
 // translateBackendAI processes AI configuration and creates corresponding Agw policies
-func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolicy, name string, policyTarget *api.PolicyTarget) ([]AgwPolicy, error) {
+func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolicy, name string, policyTarget *api.PolicyTarget) (*api.Policy, error) {
 	var errs []error
 	aiSpec := agwPolicy.Spec.Backend.AI
 
@@ -415,6 +587,18 @@ func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolic
 			translatedAIPolicy.Overrides = make(map[string]string)
 		}
 		translatedAIPolicy.Overrides[def.Field] = val
+	}
+	for _, xfm := range aiSpec.Transformations {
+		if translatedAIPolicy.Transformations == nil {
+			translatedAIPolicy.Transformations = make(map[string]string)
+		}
+
+		if !isCEL(xfm.Expression) {
+			errs = append(errs, fmt.Errorf("transformation %q is not a valid CEL expression: %v", xfm.Field, xfm.Expression))
+		}
+
+		// Still set it so it wipes out the value on error, mirroring the header value.
+		translatedAIPolicy.Transformations[xfm.Field] = string(xfm.Expression)
 	}
 
 	if aiSpec.PromptGuard != nil {
@@ -480,10 +664,10 @@ func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolic
 		"policy", agwPolicy.Name,
 		"agentgateway_policy", aiPolicy.Name)
 
-	return []AgwPolicy{{Policy: aiPolicy}}, errors.Join(errs...)
+	return aiPolicy, errors.Join(errs...)
 }
 
-func translateBackendAuth(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, name string, target *api.PolicyTarget) ([]AgwPolicy, error) {
+func translateBackendAuth(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, name string, target *api.PolicyTarget) (*api.Policy, error) {
 	var errs []error
 	auth := policy.Spec.Backend.Auth
 
@@ -519,6 +703,10 @@ func translateBackendAuth(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy
 		awsAuth, err := buildAwsAuthPolicy(ctx.Krt, auth.AWS, ctx.Collections.Secrets, policy.Namespace)
 		translatedAuth = awsAuth
 		errs = append(errs, err)
+	} else if auth.Azure != nil {
+		azureAuth, err := buildAzureAuthPolicy(ctx.Krt, auth.Azure, ctx.Collections.Secrets, policy.Namespace)
+		translatedAuth = azureAuth
+		errs = append(errs, err)
 	} else if auth.GCP != nil {
 		translatedAuth = buildGcpAuthPolicy(auth.GCP)
 	} else if auth.Passthrough != nil {
@@ -549,7 +737,7 @@ func translateBackendAuth(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy
 		"policy", policy.Name,
 		"agentgateway_policy", authPolicy.Name)
 
-	return []AgwPolicy{{Policy: authPolicy}}, errors.Join(errs...)
+	return authPolicy, errors.Join(errs...)
 }
 
 // translateRouteType converts kgateway RouteType to agentgateway proto RouteType
@@ -563,6 +751,8 @@ func translateRouteType(rt agentgateway.RouteType) api.BackendPolicySpec_Ai_Rout
 		return api.BackendPolicySpec_Ai_MODELS
 	case agentgateway.RouteTypePassthrough:
 		return api.BackendPolicySpec_Ai_PASSTHROUGH
+	case agentgateway.RouteTypeDetect:
+		return api.BackendPolicySpec_Ai_DETECT
 	case agentgateway.RouteTypeResponses:
 		return api.BackendPolicySpec_Ai_RESPONSES
 	case agentgateway.RouteTypeAnthropicTokenCount:
@@ -636,6 +826,114 @@ func buildAwsAuthPolicy(krtctx krt.HandlerContext, auth *agentgateway.AwsAuth, s
 						SecretAccessKey: secretAccessKey,
 						SessionToken:    sessionToken,
 						Region:          "",
+					},
+				},
+			},
+		},
+	}, errors.Join(errs...)
+}
+
+func buildAzureAuthPolicy(krtctx krt.HandlerContext, auth *agentgateway.AzureAuth, secrets krt.Collection[*corev1.Secret], namespace string) (*api.BackendAuthPolicy, error) {
+	var errs []error
+	if auth == nil {
+		logger.Warn("using implicit Azure auth for AI backend")
+		return &api.BackendAuthPolicy{
+			Kind: &api.BackendAuthPolicy_Azure{
+				Azure: &api.Azure{
+					Kind: &api.Azure_DeveloperImplicit{
+						DeveloperImplicit: &api.AzureDeveloperImplicit{},
+					},
+				},
+			},
+		}, nil
+	}
+
+	if auth.SecretRef.Name != "" {
+		return buildAzureClientSecret(secrets, krtctx, auth, namespace, errs)
+	}
+
+	if auth.ManagedIdentity != nil {
+		uaid := &api.AzureManagedIdentityCredential_UserAssignedIdentity{}
+		if auth.ManagedIdentity.ClientID != "" {
+			uaid.Id = &api.AzureManagedIdentityCredential_UserAssignedIdentity_ClientId{
+				ClientId: auth.ManagedIdentity.ClientID,
+			}
+		} else if auth.ManagedIdentity.ObjectID != "" {
+			uaid.Id = &api.AzureManagedIdentityCredential_UserAssignedIdentity_ObjectId{
+				ObjectId: auth.ManagedIdentity.ObjectID,
+			}
+		} else if auth.ManagedIdentity.ResourceID != "" {
+			uaid.Id = &api.AzureManagedIdentityCredential_UserAssignedIdentity_ResourceId{
+				ResourceId: auth.ManagedIdentity.ResourceID,
+			}
+		} else {
+			errs = append(errs, errors.New("no valid User Assigned Identity identifier provided"))
+			return nil, errors.Join(errs...)
+		}
+		return &api.BackendAuthPolicy{
+			Kind: &api.BackendAuthPolicy_Azure{
+				Azure: &api.Azure{
+					Kind: &api.Azure_ExplicitConfig{
+						ExplicitConfig: &api.AzureExplicitConfig{
+							CredentialSource: &api.AzureExplicitConfig_ManagedIdentityCredential{
+								ManagedIdentityCredential: &api.AzureManagedIdentityCredential{
+									UserAssignedIdentity: uaid,
+								},
+							},
+						},
+					},
+				},
+			},
+		}, nil
+	}
+
+	errs = append(errs, errors.New("no valid Azure auth method provided"))
+	return nil, errors.Join(errs...)
+}
+
+func buildAzureClientSecret(secrets krt.Collection[*corev1.Secret], krtctx krt.HandlerContext, auth *agentgateway.AzureAuth, namespace string, errs []error) (*api.BackendAuthPolicy, error) {
+	secret, err := kubeutils.GetSecret(secrets, krtctx, auth.SecretRef.Name, namespace)
+	if err != nil {
+		// Return nil auth policy if secret not found - this will be handled upstream
+		// TODO(npolshak): Add backend status errors https://github.com/kgateway-dev/kgateway/issues/11966
+		return nil, err
+	}
+
+	var clientID, tenantID, clientSecret string
+
+	// Extract client ID
+	if value, exists := kubeutils.GetSecretValue(secret, wellknown.ClientID); !exists {
+		errs = append(errs, errors.New("clientID is missing or not a valid string"))
+	} else {
+		clientID = value
+	}
+
+	// Extract tenant ID
+	if value, exists := kubeutils.GetSecretValue(secret, wellknown.TenantID); !exists {
+		errs = append(errs, errors.New("tenantID is missing or not a valid string"))
+	} else {
+		tenantID = value
+	}
+
+	// Extract client secret
+	if value, exists := kubeutils.GetSecretValue(secret, wellknown.ClientSecret); !exists {
+		errs = append(errs, errors.New("clientSecret is missing or not a valid string"))
+	} else {
+		clientSecret = value
+	}
+
+	return &api.BackendAuthPolicy{
+		Kind: &api.BackendAuthPolicy_Azure{
+			Azure: &api.Azure{
+				Kind: &api.Azure_ExplicitConfig{
+					ExplicitConfig: &api.AzureExplicitConfig{
+						CredentialSource: &api.AzureExplicitConfig_ClientSecret{
+							ClientSecret: &api.AzureClientSecret{
+								ClientSecret: clientSecret,
+								TenantId:     tenantID,
+								ClientId:     clientID,
+							},
+						},
 					},
 				},
 			},
